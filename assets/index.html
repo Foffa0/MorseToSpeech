@@ -75,6 +75,22 @@
   .animating .sym { color: var(--dim); }
   .animating .sym.on { color: var(--accent); }
 
+  /* --- device stats --- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+  .tile .name { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .tile .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .value small { font-size: 15px; font-weight: 600; color: var(--muted); }
+  .tile .detail { font-size: 14px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums;
+                  min-height: 20px; }
+  .spark { display: block; width: 100%; height: 40px; margin-top: 8px; touch-action: none; cursor: crosshair; }
+  .spark .base { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .spark .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round;
+                 stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .spark .area { fill: var(--accent); opacity: 0.12; }
+  .spark .hover-x { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+
   /* --- settings --- */
   details.card { padding: 0; }
   summary { cursor: pointer; padding: 16px 20px; font-weight: 600; list-style: none;
@@ -136,6 +152,47 @@
     <div class="log" id="log" aria-live="polite">
       <div class="empty" id="empty">Nothing yet. Tap Morse and press C, or hold C to listen.</div>
     </div>
+  </section>
+
+  <section class="card" aria-labelledby="device-label">
+    <p class="label" id="device-label">Device</p>
+    <div class="tiles">
+      <div class="tile">
+        <div class="name">CPU</div>
+        <div class="value" id="cpu-value">–</div>
+        <div class="detail" id="cpu-detail"></div>
+        <svg class="spark" id="cpu-spark" viewBox="0 0 120 40" preserveAspectRatio="none"
+             role="img" aria-label="CPU load, last 2 minutes"></svg>
+      </div>
+      <div class="tile">
+        <div class="name">Memory</div>
+        <div class="value" id="ram-value">–</div>
+        <div class="detail" id="ram-detail"></div>
+        <svg class="spark" id="ram-spark" viewBox="0 0 120 40" preserveAspectRatio="none"
+             role="img" aria-label="Memory use, last 2 minutes"></svg>
+      </div>
+      <div class="tile">
+        <div class="name">Power</div>
+        <div class="value" id="power-value">–</div>
+        <div class="detail" id="power-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">This app</div>
+        <div class="value" id="app-value">–</div>
+        <div class="detail" id="app-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">Temperature</div>
+        <div class="value" id="temp-value">–</div>
+        <div class="detail" id="temp-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">Translation</div>
+        <div class="value" id="tr-value">–</div>
+        <div class="detail" id="tr-detail"></div>
+      </div>
+    </div>
+    <p class="note" id="stats-note"></p>
   </section>
 
   <details class="card" id="settings">
@@ -390,6 +447,107 @@
       setStatus(`Couldn't save: ${e.message}`, true);
     }
   }
+
+  // ---------------------------------------------------------------- device stats
+  const fmtBytes = (b) => b == null ? "–" : b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.round(b / 1e6)} MB`;
+  const withUnit = (text) => text.replace(/ (\w+)$/, "<small> $1</small>");
+  const fmtDuration = (s) => s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` :
+    `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  const sparks = {};
+
+  // Sparkline with a fixed 0–100 % scale (so a calm line really means low load).
+  // Hover / touch shows the value at that point in the tile's detail line.
+  function drawSpark(id, history, sampleS, detailId, label) {
+    const svg = el(id);
+    const W = 120, H = 40, pad = 3;
+    const n = history.length;
+    const hoverIndex = sparks[id] ? sparks[id].hoverIndex : null;
+    sparks[id] = { history, sampleS, detailId, label, hoverIndex };
+    if (n < 2) { svg.innerHTML = ""; return; }
+    const x = (i) => (i / (n - 1)) * W;
+    const y = (v) => H - pad - (Math.min(100, Math.max(0, v)) / 100) * (H - 2 * pad);
+    const pts = history.map((v, i) => `${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
+    svg.innerHTML =
+      `<line class="base" x1="0" x2="${W}" y1="${H - pad}" y2="${H - pad}"/>` +
+      `<polygon class="area" points="0,${H - pad} ${pts} ${W},${H - pad}"/>` +
+      `<polyline class="line" points="${pts}"/>` +
+      `<line class="hover-x" id="${id}-hx" y1="0" y2="${H}" visibility="hidden"/>`;
+    if (hoverIndex != null) showHover(id, hoverIndex);
+  }
+
+  function showHover(id, i) {
+    const sp = sparks[id];
+    const n = sp.history.length;
+    i = Math.min(n - 1, Math.max(0, i));
+    sp.hoverIndex = i;
+    const hx = el(`${id}-hx`);
+    if (!hx) return;
+    const xPos = (i / (n - 1)) * 120;
+    hx.setAttribute("x1", xPos); hx.setAttribute("x2", xPos); hx.setAttribute("visibility", "visible");
+    const ago = Math.round((n - 1 - i) * sp.sampleS);
+    el(sp.detailId).textContent = `${sp.history[i]} % ${sp.label} · ${ago ? `${ago} s ago` : "now"}`;
+  }
+
+  for (const id of ["cpu-spark", "ram-spark"]) {
+    const svg = el(id);
+    svg.addEventListener("pointermove", (ev) => {
+      const sp = sparks[id];
+      if (!sp || sp.history.length < 2) return;
+      const r = svg.getBoundingClientRect();
+      showHover(id, Math.round(((ev.clientX - r.left) / r.width) * (sp.history.length - 1)));
+    });
+    svg.addEventListener("pointerleave", () => {
+      if (sparks[id]) sparks[id].hoverIndex = null;
+      if (lastStats) renderStats(lastStats);
+    });
+  }
+
+  let lastStats = null;
+  function renderStats(st) {
+    lastStats = st;
+    const cpu = st.cpu, ram = st.ram, app = st.app, pw = st.power;
+    el("cpu-value").innerHTML = cpu.percent == null ? "–" : `${Math.round(cpu.percent)}<small> %</small>`;
+    drawSpark("cpu-spark", cpu.history, st.sample_s, "cpu-detail", "CPU");
+    if (sparks["cpu-spark"].hoverIndex == null) el("cpu-detail").textContent = `${cpu.cores} cores · last 2 min`;
+
+    el("ram-value").innerHTML = ram.used == null ? "–" : withUnit(fmtBytes(ram.used));
+    drawSpark("ram-spark", ram.history, st.sample_s, "ram-detail", "used");
+    if (sparks["ram-spark"].hoverIndex == null)
+      el("ram-detail").textContent = ram.total ? `of ${fmtBytes(ram.total)} (${Math.round(ram.percent)} %)` : "";
+
+    if (pw.watts == null) {
+      el("power-value").textContent = "n/a";
+      el("power-detail").textContent = "No power sensor on this board";
+    } else {
+      el("power-value").innerHTML = `${pw.watts.toFixed(2)}<small> W</small>`;
+      el("power-detail").textContent = `${pw.source === "measured" ? "Measured" : "Estimated from CPU"} · ` +
+        `${(pw.energy_wh * 1000).toFixed(1)} mWh so far`;
+    }
+
+    el("app-value").innerHTML = app.ram == null ? "–" : withUnit(fmtBytes(app.ram));
+    el("app-detail").textContent = app.cpu_percent_avg == null ? "" :
+      `RAM · avg ${app.cpu_percent_avg} % CPU · ${app.cpu_seconds} CPU-s`;
+
+    el("temp-value").innerHTML = st.temperature == null ? "n/a" : `${st.temperature.toFixed(1)}<small> °C</small>`;
+    el("temp-detail").textContent = `Uptime ${fmtDuration(st.uptime_s)}`;
+
+    const tr = st.timings.translate;
+    el("tr-value").innerHTML = tr ? `${tr.avg_ms}<small> ms</small>` : "–";
+    el("tr-detail").textContent = tr ? `avg of ${tr.count} · last ${tr.last_ms} ms` : "No translations yet";
+
+    el("stats-note").textContent = pw.source === "unavailable"
+      ? "Power: set MORSE_IDLE_W and MORSE_FULL_W (measured with a USB-C power meter) to show an estimate."
+      : "";
+  }
+
+  async function pollStats() {
+    try {
+      const r = await fetch("/api/stats", { cache: "no-store" });
+      if (r.ok) renderStats(await r.json());
+    } catch (e) { /* the live poll shows the offline banner */ }
+    setTimeout(pollStats, 2000);
+  }
+  pollStats();
 
   el("swap").addEventListener("click", () => langState && saveLangs(langState.partner, langState.user));
   el("settings").addEventListener("toggle", () => { el("settings").dataset.touched = "1"; });

@@ -1,11 +1,12 @@
-"""Download all offline models for English <-> German translation mode.
+"""Download all offline models (English + German).
 
     python download_models.py
 
-  - Argos Translate en->de and de->en  -> models/translate/en_de, de_en  (~165 MB each)
-  - Vosk German speech recognition      -> models/vosk-model-small-de-0.15 (~45 MB)
-  - Piper German voice (thorsten)       -> voices/de_DE-thorsten-medium.onnx (~63 MB)
-Already downloaded files are skipped.
+  - Piper voices (TTS):           voices/en_US-lessac-medium, voices/de_DE-thorsten-medium (~63 MB each)
+  - Vosk speech recognition:      models/vosk-model-small-en-us-0.15, models/vosk-model-small-de-0.15
+                                  (~40-45 MB each)
+  - Argos Translate en<->de:      models/translate/en_de, models/translate/de_en (~157 MB each)
+Already downloaded files are skipped, so it is safe to run again.
 """
 
 import io
@@ -18,13 +19,19 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MODELS = os.path.join(HERE, "models")
 VOICES = os.path.join(HERE, "voices")
 
+PIPER_BASE = "https://huggingface.co/rhasspy/piper-voices/resolve/main/"
+PIPER_VOICES = {
+    "en_US-lessac-medium": PIPER_BASE + "en/en_US/lessac/medium/en_US-lessac-medium",
+    "de_DE-thorsten-medium": PIPER_BASE + "de/de_DE/thorsten/medium/de_DE-thorsten-medium",
+}
+VOSK_MODELS = {
+    "vosk-model-small-en-us-0.15": "https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip",
+    "vosk-model-small-de-0.15": "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip",
+}
 ARGOS = {
     "en_de": "https://argos-net.com/v1/translate-en_de-1_3.argosmodel",
     "de_en": "https://argos-net.com/v1/translate-de_en-1_3.argosmodel",
 }
-VOSK_DE = "https://alphacephei.com/vosk/models/vosk-model-small-de-0.15.zip"
-PIPER_DE = ("https://huggingface.co/rhasspy/piper-voices/resolve/main/"
-            "de/de_DE/thorsten/medium/de_DE-thorsten-medium")
 
 
 def fetch(url):
@@ -32,6 +39,29 @@ def fetch(url):
     req = urllib.request.Request(url, headers={"User-Agent": "curl/8.0"})  # some servers block urllib
     with urllib.request.urlopen(req) as r:
         return r.read()
+
+
+def piper(name, url):
+    os.makedirs(VOICES, exist_ok=True)
+    for ext in (".onnx.json", ".onnx"):
+        dest = os.path.join(VOICES, name + ext)
+        if os.path.exists(dest):
+            print(f"already there: {dest}")
+            continue
+        with open(dest + ".part", "wb") as f:
+            f.write(fetch(url + ext))
+        os.replace(dest + ".part", dest)
+    print(f"ok: voice {name}")
+
+
+def vosk(name, url):
+    dest = os.path.join(MODELS, name)
+    if os.path.isdir(dest):
+        print(f"already there: {dest}")
+        return
+    os.makedirs(MODELS, exist_ok=True)
+    zipfile.ZipFile(io.BytesIO(fetch(url))).extractall(MODELS)
+    print(f"ok: {dest}")
 
 
 def argos(pair, url):
@@ -53,30 +83,10 @@ def argos(pair, url):
     print(f"ok: {dest}")
 
 
-def vosk_de():
-    dest = os.path.join(MODELS, "vosk-model-small-de-0.15")
-    if os.path.isdir(dest):
-        print(f"already there: {dest}")
-        return
-    zipfile.ZipFile(io.BytesIO(fetch(VOSK_DE))).extractall(MODELS)
-    print(f"ok: {dest}")
-
-
-def piper_de():
-    os.makedirs(VOICES, exist_ok=True)
-    for ext in (".onnx.json", ".onnx"):
-        dest = os.path.join(VOICES, "de_DE-thorsten-medium" + ext)
-        if os.path.exists(dest):
-            print(f"already there: {dest}")
-            continue
-        with open(dest + ".part", "wb") as f:
-            f.write(fetch(PIPER_DE + ext))
-        os.replace(dest + ".part", dest)
-    print("ok: German voice")
-
-
 if __name__ == "__main__":
+    for name, url in PIPER_VOICES.items():
+        piper(name, url)
+    for name, url in VOSK_MODELS.items():
+        vosk(name, url)
     for pair, url in ARGOS.items():
         argos(pair, url)
-    piper_de()
-    vosk_de()

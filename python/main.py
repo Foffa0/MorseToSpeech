@@ -12,6 +12,7 @@ from languages import LanguageSettings
 from live import LiveState
 from morse import MorseDecoder, encode
 from speech_to_morse import SpeechToMorse
+from stats import SystemStats
 from translate import Translator
 from tts import VOICE_PATHS, Speaker
 
@@ -21,6 +22,7 @@ from tts import VOICE_PATHS, Speaker
 translator = Translator()
 speaker = Speaker()
 live = LiveState()   # what the web page shows (see live.py)
+stats = SystemStats().start()   # CPU / RAM / power for the web page (see stats.py)
 
 
 def blink_morse_on_mcu(text, code):
@@ -32,7 +34,8 @@ def blink_morse_on_mcu(text, code):
 
 def translate_partner_speech(text):
     if langs.translating_in:
-        return translator.translate(text, langs.partner, langs.user)
+        with stats.timed("translate"):
+            return translator.translate(text, langs.partner, langs.user)
     return text
 
 
@@ -163,7 +166,8 @@ def speak():
     if not sentence:
         return
     if langs.translating_out:
-        translated = translator.translate(sentence, langs.user, langs.partner)
+        with stats.timed("translate"):
+            translated = translator.translate(sentence, langs.user, langs.partner)
         print(f"[translate] {sentence!r} -> {translated!r}", flush=True)
         speaker.say(translated, lang=langs.partner)
         live.add("you", text=sentence, code=encode(sentence), spoken=translated,
@@ -240,6 +244,7 @@ def api_live(since: int = 0):
 
 ui = WebUI()
 ui.expose_api("GET", "/api/live", api_live)
+ui.expose_api("GET", "/api/stats", lambda: stats.snapshot())
 ui.expose_api("GET", "/api/languages", api_get_languages)
 ui.expose_api("POST", "/api/languages", api_set_languages)
 
