@@ -4,8 +4,7 @@
 //   Button B: short = backspace -> "backspace"
 //             long  = recalibrate (tap PARIS) -> "calibrate"
 //   Button C: short = speak    -> "speak"
-//             long  = listen   -> "wake"   (stand-in until the Nicla Voice is wired)
-//   Nicla Voice wake pin       -> "wake"
+//             long  = listen   -> "listen" (speech -> Morse)
 // Python -> MCU: "play_morse"(code) blinks the Modulino LEDs, e.g. "... --- ..."
 // LED matrix (13x8): scrolling Morse tape, right to left.
 //   rows 1-2: what the user taps on button A    rows 5-6: Morse from speech-to-Morse
@@ -22,11 +21,6 @@ const unsigned long DEBOUNCE_MS = 15;
 const unsigned long LONG_PRESS_MS = 800;
 const unsigned long MORSE_UNIT_MS = 80;     // same as UNIT_MS in speech_to_morse.py
 
-// Nicla Voice: set to true once its output pin is wired (pulses HIGH on the wake word).
-// Careful: Nicla Voice I/O is 1.8 V, the UNO Q is 3.3 V -> use a level shifter.
-const bool USE_NICLA_PIN = false;
-const int NICLA_WAKE_PIN = 2;
-
 bool stableState[3] = {false, false, false};
 bool lastRaw[3] = {false, false, false};
 unsigned long lastChange[3] = {0, 0, 0};
@@ -40,8 +34,6 @@ int morseIdx = -1;
 unsigned long morseNext = 0;
 bool morseLedOn = false;
 
-bool niclaLast = false;
-unsigned long niclaLastWake = 0;
 
 // --- LED matrix tape ---
 const int MATRIX_W = 13;
@@ -69,7 +61,6 @@ void setup() {
   matrix.begin();
   matrix.setGrayscaleBits(3);
   matrix.draw(tape);
-  if (USE_NICLA_PIN) pinMode(NICLA_WAKE_PIN, INPUT_PULLDOWN);
 }
 
 void onPress(int i, unsigned long t) {
@@ -89,7 +80,7 @@ void onRelease(int i, unsigned long t) {
     if (duration >= LONG_PRESS_MS) Bridge.notify("calibrate");
     else Bridge.notify("backspace");
   } else if (i == 2) {
-    if (duration >= LONG_PRESS_MS) Bridge.notify("wake");
+    if (duration >= LONG_PRESS_MS) Bridge.notify("listen");
     else Bridge.notify("speak");
   }
 }
@@ -109,16 +100,6 @@ void updateButtons(unsigned long now) {
       else onRelease(i, lastChange[i]);
     }
   }
-}
-
-void updateNicla(unsigned long now) {
-  if (!USE_NICLA_PIN) return;
-  bool level = digitalRead(NICLA_WAKE_PIN) == HIGH;
-  if (level && !niclaLast && now - niclaLastWake > 2000) {
-    niclaLastWake = now;
-    Bridge.notify("wake");
-  }
-  niclaLast = level;
 }
 
 // Non-blocking LED player. After every dot/dash comes 1 unit off;
@@ -186,7 +167,6 @@ void loop() {
   lastPoll = now;
 
   updateButtons(now);
-  updateNicla(now);
   updateMorse(now);
   updateTape(now);
 }
