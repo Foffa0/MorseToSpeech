@@ -34,6 +34,35 @@ MORSE_TABLE = {
     ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/",
 }
 UNKNOWN_CHAR = "?"
+CHAR_TO_MORSE = {v: k for k, v in MORSE_TABLE.items()}
+
+
+# --- Encoding (text -> Morse), used by speech-to-Morse -----------------------
+def encode(text):
+    """'SOS help' -> '... --- ... / .... . .-.. .--.'  (unknown characters are skipped)."""
+    words = []
+    for word in text.upper().split():
+        letters = [CHAR_TO_MORSE[c] for c in word if c in CHAR_TO_MORSE]
+        if letters:
+            words.append(" ".join(letters))
+    return " / ".join(words)
+
+
+def timeline(code, unit_ms=80):
+    """Morse code string from encode() -> list of (on, duration_ms) with standard timing:
+    dot 1, dash 3, gap inside letter 1, between letters 3, between words 7 units."""
+    out = []
+    for word_i, word in enumerate(code.split(" / ")):
+        if word_i:
+            out.append((False, 7 * unit_ms))
+        for letter_i, letter in enumerate(word.split(" ")):
+            if letter_i:
+                out.append((False, 3 * unit_ms))
+            for sym_i, sym in enumerate(letter):
+                if sym_i:
+                    out.append((False, unit_ms))
+                out.append((True, unit_ms if sym == "." else 3 * unit_ms))
+    return out
 
 
 def _noop(*_args):
