@@ -1,24 +1,32 @@
 # 😀 MorseToSpeech
 
-## Wake word (Nicla Voice)
+Tap Morse code on a button and the Arduino UNO Q speaks it out loud, fully offline.
 
-An Arduino Nicla Voice listens for the wake word. When it hears it, it tells the UNO Q to start the interaction. For now the wake word is the built-in **"Alexa"** demo model. A custom name will be trained later in Edge Impulse.
+## Hardware
+- Arduino UNO Q
+- Modulino Buttons on Qwiic: **A** = Morse key, **B** = backspace, **C** = speak the whole sentence
+- Headset or USB speaker
 
-### Hardware
-- Connect the Nicla Voice to the UNO Q with a **Micro-USB data cable** (charge-only cables won't work).
-- The UNO Q has only one USB-C port, so connect both through a **USB-C hub with power passthrough**.
+## How it works
+- `sketch/sketch.ino` (STM32): debounces the buttons, measures press durations, sends events over the Bridge.
+- `python/morse.py`: adaptive decoder. It learns the user's dot/dash speed (EMA) and detects letter and word gaps.
+- `python/tts.py`: offline TTS. It uses Piper, falls back to espeak-ng, and runs in a background thread.
+- `python/main.py`: wires everything together. Each finished word is spoken immediately.
 
-### Flashing the Nicla (from a PC, once)
-1. In the Arduino IDE, install the **"Arduino Mbed OS Nicla Boards"** core and select the board **Arduino Nicla Voice**.
-2. Update the NDP120 firmware and load the Alexa model to the Nicla's flash. Follow "Updating the NDP120 firmware" in the [Nicla Voice user manual](https://docs.arduino.cc/tutorials/nicla-voice/user-manual/). It flashes `mcu_fw_120_v91.synpkg`, `dsp_firmware_v91.synpkg` and `alexa_334_NDP120_B0_v11_v91.synpkg`.
-3. Optional sanity check: flash `File > Examples > NDP > AlexaDemo`, say "Alexa", and the LED flashes blue.
-4. Flash `nicla_wake/nicla_wake.ino`. Once the models are loaded, the LED blinks green.
+## Setup
+1. In App Lab, add the **Modulino** library to the sketch.
+2. Download the Piper voice into `python/voices/`:
+   ```
+   mkdir -p python/voices && cd python/voices
+   curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx
+   curl -LO https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json
+   ```
+3. Run the app from App Lab.
 
-### Protocol (USB serial, 115200 baud)
-| Line | Meaning |
-|------|---------|
-| `WAKE <label>` | Wake word detected (at most once per 2 s) |
-| `# ...` | Debug output |
+## Tests (laptop)
+```
+cd python && python -m pytest test_morse.py
+```
 
-### UNO Q side
-`python/main.py` finds the Nicla's port automatically. Set `NICLA_PORT` to override it. On every `WAKE` line it calls `on_wake(label)`. **Plug the recording, speech-to-text and Morse steps into `on_wake()`.**
+## Tuning
+The timing constants are at the top of `python/morse.py` (initial speed, adapt rate, letter/word gap factors).
