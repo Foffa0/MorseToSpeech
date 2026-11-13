@@ -73,3 +73,12 @@ the German Vosk model, and the German Piper voice (thorsten).
 - Set the partner's language with the env var `MORSE_PARTNER_LANG` (`de` by default, `en` = no translation). If a model
   is missing, that direction falls back to no translation.
 - Test on the laptop: `python translate.py en de "I NEED WATER"` → `Ich brauche Wasser.`
+
+## Web page: language selection
+The WebUI brick serves `assets/index.html` on **port 7000**: open `http://<board-ip>:7000`, or the HDMI touch monitor's
+browser on the board itself.
+- Choose **your language** (the Morse side) and the **partner's language** (the speech side), or swap them.
+- The page shows what will happen in each direction, and warns about missing models.
+- The choice is saved in `python/settings.json` and applies immediately. Models for a new language load in the background.
+- API: `GET /api/languages` and `POST /api/languages?user=en&partner=de`.
+- Fully offline: no external scripts or fonts.

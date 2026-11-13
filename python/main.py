@@ -1,31 +1,23 @@
-"""MorseToSpeech: Modulino Buttons -> adaptive Morse decoder -> console + offline TTS."""
+"""MorseToSpeech: Modulino Buttons -> adaptive Morse decoder -> console + offline TTS.
+Web page (WebUI brick, port 7000): choose the user's and the partner's language."""
 
 import os
 import threading
 import time
 
+from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App, Bridge
 
+from languages import LanguageSettings
 from morse import MorseDecoder
 from speech_to_morse import SpeechToMorse
 from translate import Translator
-from tts import Speaker
+from tts import VOICE_PATHS, Speaker
 
 # --- Languages ------------------------------------------------------------------
-# The user taps English. If the partner speaks another language, everything is translated
-# offline: Morse -> German speech, and German speech -> English Morse.
-USER_LANG = "en"
-PARTNER_LANG = os.environ.get("MORSE_PARTNER_LANG", "de")   # "en" = no translation
-
-translator = Translator() if PARTNER_LANG != USER_LANG else None
-translate_out = bool(translator and translator.available(USER_LANG, PARTNER_LANG))
-translate_in = bool(translator and translator.available(PARTNER_LANG, USER_LANG))
-if translator:
-    print(f"[translate] {USER_LANG}->{PARTNER_LANG}: {'on' if translate_out else 'MISSING'}, "
-          f"{PARTNER_LANG}->{USER_LANG}: {'on' if translate_in else 'MISSING'}", flush=True)
-    translator.preload(*([(USER_LANG, PARTNER_LANG)] if translate_out else []),
-                       *([(PARTNER_LANG, USER_LANG)] if translate_in else []))
-
+# The user taps Morse in their language. If the partner speaks another language,
+# everything is translated offline in both directions. Changeable on the web page.
+translator = Translator()
 speaker = Speaker()
 
 
@@ -36,10 +28,32 @@ def blink_morse_on_mcu(text, code):
         print(f"[s2m] could not send to MCU: {e}", flush=True)
 
 
-speech_to_morse = SpeechToMorse(
-    on_morse=blink_morse_on_mcu,
-    lang=PARTNER_LANG if translate_in else USER_LANG,
-    translate=(lambda text: translator.translate(text, PARTNER_LANG, USER_LANG)) if translate_in else None)
+def translate_partner_speech(text):
+    if langs.translating_in:
+        return translator.translate(text, langs.partner, langs.user)
+    return text
+
+
+def on_language_change(user, partner):
+    # loading models takes a moment -> in the background
+    def load():
+        speech_to_morse.set_lang(partner)
+        if langs.translating_out:
+            translator.preload((user, partner))
+        if langs.translating_in:
+            translator.preload((partner, user))
+    threading.Thread(target=load, daemon=True).start()
+
+
+langs = LanguageSettings(
+    translator,
+    on_change=on_language_change,
+    stt_available=SpeechToMorse.stt_available,
+    voice_available=lambda lang: os.path.exists(VOICE_PATHS.get(lang, "")))
+
+speech_to_morse = SpeechToMorse(on_morse=blink_morse_on_mcu, lang=langs.partner,
+                                translate=translate_partner_speech)
+on_language_change(langs.user, langs.partner)
 lock = threading.Lock()
 
 
@@ -52,9 +66,9 @@ def show():
 
 
 def on_word(word):
-    if translate_out:
-        return         # translation needs the whole sentence -> spoken on button C
-    speaker.say(word)  # speak each finished word immediately
+    if langs.translating_out:
+        return                          # translation needs the whole sentence -> button C
+    speaker.say(word, lang=langs.user)  # speak each finished word immediately
 
 
 def on_calibration(ok):
@@ -122,12 +136,12 @@ def speak():
         speaker.say("Okay, skipped.")
         return
     print(f"[sentence] {sentence}", flush=True)
-    if translate_out and sentence:
-        translated = translator.translate(sentence, USER_LANG, PARTNER_LANG)
+    if langs.translating_out and sentence:
+        translated = translator.translate(sentence, langs.user, langs.partner)
         print(f"[translate] {sentence!r} -> {translated!r}", flush=True)
-        speaker.say(translated, lang=PARTNER_LANG)
+        speaker.say(translated, lang=langs.partner)
     else:
-        speaker.say(sentence)
+        speaker.say(sentence, lang=langs.user)
 
 
 def activate_listening():
@@ -142,6 +156,25 @@ Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
 Bridge.provide("speak", speak)
 Bridge.provide("calibrate", start_calibration)
+
+
+# --- Web page: language selection (assets/index.html) -------------------------
+def api_get_languages():
+    return langs.status()
+
+
+def api_set_languages(user: str, partner: str):
+    from fastapi import HTTPException
+    try:
+        langs.set(user, partner)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return langs.status()
+
+
+ui = WebUI()
+ui.expose_api("GET", "/api/languages", api_get_languages)
+ui.expose_api("POST", "/api/languages", api_set_languages)
 
 
 def loop():

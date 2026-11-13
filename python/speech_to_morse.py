@@ -48,6 +48,18 @@ class SpeechToMorse:
         self._arecord = shutil.which("arecord")
         self._aplay = shutil.which("aplay")
         self._model = self._load_model(model_path or MODEL_PATHS.get(lang, MODEL_PATH))
+        self._models = {lang: self._model}   # loaded Vosk models per language
+
+    def set_lang(self, lang):
+        """Switch the partner's language at runtime (models are cached after first load)."""
+        if lang not in self._models:
+            self._models[lang] = self._load_model(MODEL_PATHS.get(lang, MODEL_PATH))
+        self.lang = lang
+        self._model = self._models[lang]
+
+    @staticmethod
+    def stt_available(lang):
+        return os.path.isdir(MODEL_PATHS.get(lang, ""))
 
     # --- public API -----------------------------------------------------------
     def activate(self):
