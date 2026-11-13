@@ -45,7 +45,7 @@ The UNO Q's 13×8 matrix shows a scrolling Morse tape, right to left, 40 ms per 
 - **rows 5–6:** Morse coming from speech-to-Morse (dot = 2 px, dash = 6 px)
 
 ## Speech → Morse
-Hold **C** (≥ 0.8 s), or say the wake word to the Nicla Voice. The UNO Q then listens to the conversation partner,
+Hold **C** (≥ 0.8 s). The UNO Q then listens to the conversation partner,
 transcribes offline with Vosk, and outputs the sentence as Morse beeps on the headset and blinks on the Modulino LEDs.
 
 Download the STT model into `python/models/`:
@@ -56,14 +56,20 @@ unzip vosk-model-small-en-us-0.15.zip && rm vosk-model-small-en-us-0.15.zip
 ```
 Test on the laptop: `python speech_to_morse.py "hello"` (beeps only) or `python speech_to_morse.py --listen`.
 
-## Wake word (Nicla Voice)
-The Nicla Voice listens for the built-in **"Alexa"** model and sends `WAKE <label>` over USB serial (115200 baud).
-`python/wake.py` reads it and calls `on_wake()` in `python/main.py`, which starts speech → Morse.
 
-1. Plug the Nicla into the UNO Q with a **Micro-USB data cable**. Use a USB-C hub with power passthrough, since the UNO Q has one USB-C port.
-2. In the Arduino IDE, install the **Arduino Mbed OS Nicla Boards** core and select **Arduino Nicla Voice**.
-3. Load the NDP120 firmware and Alexa model once (see "Updating the NDP120 firmware" in the
-   [Nicla Voice manual](https://docs.arduino.cc/tutorials/nicla-voice/user-manual/)).
-4. Flash `nicla_wake/nicla_wake.ino`. The LED blinks green when ready and blue on each wake word.
+## Offline translation (English ↔ German)
+The user taps English. The conversation partner speaks German. Everything runs offline on the board:
+- **User → partner:** tap a sentence in Morse, press **C**, and the device speaks it **in German**. In this mode words aren't
+  spoken one by one, because translation needs the whole sentence.
+- **Partner → user:** hold C, and German speech is recognized (Vosk), translated to English,
+  and played as Morse.
 
-`NICLA_PORT` overrides the automatic port detection. A custom wake word can be trained later in Edge Impulse.
+Setup: `cd python && python download_models.py`. This downloads the Argos Translate models (en→de, de→en, ~157 MB each),
+the German Vosk model, and the German Piper voice (thorsten).
+
+- The Argos models run directly with **CTranslate2 in int8** instead of the `argostranslate` package, which would pull
+  in PyTorch. Translation takes about 50 ms per sentence on a laptop.
+- German questions are detected from the first word, because speech recognition gives no punctuation.
+- Set the partner's language with the env var `MORSE_PARTNER_LANG` (`de` by default, `en` = no translation). If a model
+  is missing, that direction falls back to no translation.
+- Test on the laptop: `python translate.py en de "I NEED WATER"` → `Ich brauche Wasser.`

@@ -1,7 +1,7 @@
 """Speech -> Morse: listen to the conversation partner, transcribe offline (Vosk),
 then output the sentence as Morse beeps (headset) and LED blinks (via callback).
 
-Entry point for the wake word (Nicla Voice): SpeechToMorse.activate()
+Entry point (long press on button C): SpeechToMorse.activate()
 Laptop test:
     python speech_to_morse.py "hello"      # only play Morse beeps for a text
     python speech_to_morse.py --listen     # listen on the mic, then play Morse
@@ -20,7 +20,13 @@ from array import array
 
 from morse import encode, timeline
 
-MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "vosk-model-small-en-us-0.15")
+MODELS_DIR = os.path.join(os.path.dirname(__file__), "models")
+MODEL_PATH = os.path.join(MODELS_DIR, "vosk-model-small-en-us-0.15")
+# Speech recognition model per language of the conversation partner
+MODEL_PATHS = {"en": MODEL_PATH, "de": os.path.join(MODELS_DIR, "vosk-model-small-de-0.15")}
+# Morse has no umlauts: write them the usual way
+UMLAUTS = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "ß": "ss",
+                         "Ä": "AE", "Ö": "OE", "Ü": "UE"})
 SAMPLE_RATE = 16000
 UNIT_MS = 80             # Morse output speed (80 ms dot ~ 15 words per minute)
 TONE_HZ = 700
@@ -29,27 +35,33 @@ CHUNK_BYTES = 4000       # 125 ms of 16 kHz mono 16-bit audio
 
 
 class SpeechToMorse:
-    def __init__(self, on_morse=None, unit_ms=UNIT_MS, model_path=MODEL_PATH):
-        """on_morse(text, code): called before playback, e.g. to blink LEDs on the MCU."""
+    def __init__(self, on_morse=None, unit_ms=UNIT_MS, model_path=None, lang="en",
+                 translate=None):
+        """on_morse(text, code): called before playback, e.g. to blink LEDs on the MCU.
+        lang: language the partner speaks (picks the Vosk model).
+        translate(text) -> text: optional, e.g. German -> English before playing Morse."""
         self.on_morse = on_morse
         self.unit_ms = unit_ms
+        self.lang = lang
+        self.translate = translate
         self._busy = threading.Lock()
         self._arecord = shutil.which("arecord")
         self._aplay = shutil.which("aplay")
-        self._model = self._load_model(model_path)
+        self._model = self._load_model(model_path or MODEL_PATHS.get(lang, MODEL_PATH))
 
     # --- public API -----------------------------------------------------------
     def activate(self):
-        """Wake word detected: listen once and send the sentence as Morse. Non-blocking.
+        """Listen once and send the sentence as Morse. Non-blocking.
         Returns False if a listening session is already running."""
         if not self._busy.acquire(blocking=False):
-            print("[s2m] already listening, wake ignored", flush=True)
+            print("[s2m] already listening, ignored", flush=True)
             return False
         threading.Thread(target=self._session, daemon=True).start()
         return True
 
     def send(self, text):
         """Convert text to Morse and play it (beeps + on_morse callback). Blocking."""
+        text = text.translate(UMLAUTS)
         code = encode(text)
         if not code:
             return
@@ -83,6 +95,10 @@ class SpeechToMorse:
     def _session(self):
         try:
             text = self.listen()
+            if text and self.translate:
+                translated = self.translate(text)
+                print(f"[s2m] translated: {text!r} -> {translated!r}", flush=True)
+                text = translated
             if text:
                 self.send(text)
         except Exception as e:

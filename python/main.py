@@ -1,14 +1,30 @@
 """MorseToSpeech: Modulino Buttons -> adaptive Morse decoder -> console + offline TTS."""
 
+import os
 import threading
 import time
 
 from arduino.app_utils import App, Bridge
 
-import wake
 from morse import MorseDecoder
 from speech_to_morse import SpeechToMorse
+from translate import Translator
 from tts import Speaker
+
+# --- Languages ------------------------------------------------------------------
+# The user taps English. If the partner speaks another language, everything is translated
+# offline: Morse -> German speech, and German speech -> English Morse.
+USER_LANG = "en"
+PARTNER_LANG = os.environ.get("MORSE_PARTNER_LANG", "de")   # "en" = no translation
+
+translator = Translator() if PARTNER_LANG != USER_LANG else None
+translate_out = bool(translator and translator.available(USER_LANG, PARTNER_LANG))
+translate_in = bool(translator and translator.available(PARTNER_LANG, USER_LANG))
+if translator:
+    print(f"[translate] {USER_LANG}->{PARTNER_LANG}: {'on' if translate_out else 'MISSING'}, "
+          f"{PARTNER_LANG}->{USER_LANG}: {'on' if translate_in else 'MISSING'}", flush=True)
+    translator.preload(*([(USER_LANG, PARTNER_LANG)] if translate_out else []),
+                       *([(PARTNER_LANG, USER_LANG)] if translate_in else []))
 
 speaker = Speaker()
 
@@ -20,7 +36,10 @@ def blink_morse_on_mcu(text, code):
         print(f"[s2m] could not send to MCU: {e}", flush=True)
 
 
-speech_to_morse = SpeechToMorse(on_morse=blink_morse_on_mcu)
+speech_to_morse = SpeechToMorse(
+    on_morse=blink_morse_on_mcu,
+    lang=PARTNER_LANG if translate_in else USER_LANG,
+    translate=(lambda text: translator.translate(text, PARTNER_LANG, USER_LANG)) if translate_in else None)
 lock = threading.Lock()
 
 
@@ -33,6 +52,8 @@ def show():
 
 
 def on_word(word):
+    if translate_out:
+        return         # translation needs the whole sentence -> spoken on button C
     speaker.say(word)  # speak each finished word immediately
 
 
@@ -101,29 +122,26 @@ def speak():
         speaker.say("Okay, skipped.")
         return
     print(f"[sentence] {sentence}", flush=True)
-    speaker.say(sentence)
+    if translate_out and sentence:
+        translated = translator.translate(sentence, USER_LANG, PARTNER_LANG)
+        print(f"[translate] {sentence!r} -> {translated!r}", flush=True)
+        speaker.say(translated, lang=PARTNER_LANG)
+    else:
+        speaker.say(sentence)
 
 
 def activate_listening():
-    """Wake word (Nicla Voice) or long press on C: listen to the partner, answer in Morse."""
-    print("[wake] activating speech-to-Morse", flush=True)
+    """Long press on C: listen to the partner, answer in Morse."""
+    print("[listen] activating speech-to-Morse", flush=True)
     speech_to_morse.activate()
 
 
-Bridge.provide("wake", activate_listening)  # long press on C (MCU sketch)
+Bridge.provide("listen", activate_listening)  # long press on C (MCU sketch)
 Bridge.provide("key_down", key_down)
 Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
 Bridge.provide("speak", speak)
 Bridge.provide("calibrate", start_calibration)
-# --- Wake word (Nicla Voice over USB, see wake.py) ---------------------------
-def on_wake(label):
-    """Called once per detected wake word (from the Nicla Voice, see wake.py)."""
-    print(f"Wake word detected ({label})", flush=True)
-    activate_listening()
-
-
-wake.start(on_wake)
 
 
 def loop():

@@ -1,3 +1,4 @@
-pyserial
 piper-tts
 vosk
+ctranslate2
+sentencepiece
