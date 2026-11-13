@@ -1,2 +1,6 @@
 # ignore app cache folder
 .cache/
+
+# Piper voice models (large, download separately)
+python/voices/
+__pycache__/
