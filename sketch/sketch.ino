@@ -1,7 +1,8 @@
 // MorseToSpeech - STM32 side of the UNO Q.
 // Reads Modulino Buttons, measures press durations and sends events to Python.
 //   Button A: Morse key        -> "key_down", "key_up"(duration_ms)
-//   Button B: backspace        -> "backspace"
+//   Button B: short = backspace -> "backspace"
+//             long  = recalibrate (tap PARIS) -> "calibrate"
 //   Button C: short = speak    -> "speak"
 //             long  = listen   -> "wake"   (stand-in until the Nicla Voice is wired)
 //   Nicla Voice wake pin       -> "wake"
@@ -85,7 +86,8 @@ void onRelease(int i, unsigned long t) {
     buttons.setLeds(false, false, false);
     Bridge.notify("key_up", (int)duration);
   } else if (i == 1) {
-    Bridge.notify("backspace");
+    if (duration >= LONG_PRESS_MS) Bridge.notify("calibrate");
+    else Bridge.notify("backspace");
   } else if (i == 2) {
     if (duration >= LONG_PRESS_MS) Bridge.notify("wake");
     else Bridge.notify("speak");
