@@ -74,7 +74,17 @@ the German Vosk model, and the German Piper voice (thorsten).
   is missing, that direction falls back to no translation.
 - Test on the laptop: `python translate.py en de "I NEED WATER"` → `Ich brauche Wasser.`
 
-## Web page: language selection
+## Web page: live view and language selection
+- **Now typing:** the sentence being tapped, the dots and dashes of the current letter, and a dot that lights up while
+  button A is held. It also shows calibration progress.
+- **Conversation:** a chat of everything said. Your sentences show the translation that was spoken. The partner's
+  sentences show the original speech and the translation. Every message shows its **Morse code** letter by letter,
+  and incoming Morse lights up **in time with the playback** on the device.
+- **Chips:** Listening…, the languages, and the Morse speed set with the knob.
+- The page polls `GET /api/live?since=<id>` every 200 ms and only gets new events. It uses polling instead of WebSockets
+  so that it stays fully offline.
+
+### Language selection
 The WebUI brick serves `assets/index.html` on **port 7000**: open `http://<board-ip>:7000`, or the HDMI touch monitor's
 browser on the board itself.
 - Choose **your language** (the Morse side) and the **partner's language** (the speech side), or swap them.
@@ -82,3 +92,12 @@ browser on the board itself.
 - The choice is saved in `python/settings.json` and applies immediately. Models for a new language load in the background.
 - API: `GET /api/languages` and `POST /api/languages?user=en&partner=de`.
 - Fully offline: no external scripts or fonts.
+
+## Morse speed (Modulino Knob)
+The knob sets how fast Morse is **played** to the user (headset beeps, LEDs and LED matrix):
+- **Turn right** for faster and **left** for slower, from 5 to 30 words per minute (wpm). The default is 15 wpm, an 80 ms dot.
+- **Press** to reset to 15 wpm.
+- While turning, the LED matrix shows a speed bar. After you stop, a short preview (Morse `K`) plays at the new speed.
+- The MCU handles the knob and the LEDs, and sends `set_speed`(wpm) to Python for the audio. After a restart, Python
+  reads the current value with `get_speed`.
+- The knob doesn't change the decoding of what the user taps. That still adapts automatically (see calibration).

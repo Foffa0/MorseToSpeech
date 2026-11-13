@@ -36,11 +36,14 @@ CHUNK_BYTES = 4000       # 125 ms of 16 kHz mono 16-bit audio
 
 class SpeechToMorse:
     def __init__(self, on_morse=None, unit_ms=UNIT_MS, model_path=None, lang="en",
-                 translate=None):
+                 translate=None, on_event=None):
         """on_morse(text, code): called before playback, e.g. to blink LEDs on the MCU.
         lang: language the partner speaks (picks the Vosk model).
-        translate(text) -> text: optional, e.g. German -> English before playing Morse."""
+        translate(text) -> text: optional, e.g. German -> English before playing Morse.
+        on_event(kind, data): 'listening' (True/False) and 'heard' ({heard, text, code}),
+        e.g. for the live web page."""
         self.on_morse = on_morse
+        self.on_event = on_event
         self.unit_ms = unit_ms
         self.lang = lang
         self.translate = translate
@@ -56,6 +59,20 @@ class SpeechToMorse:
             self._models[lang] = self._load_model(MODEL_PATHS.get(lang, MODEL_PATH))
         self.lang = lang
         self._model = self._models[lang]
+
+    def set_wpm(self, wpm):
+        """Output speed in words per minute (PARIS standard: dot = 1200 / wpm ms)."""
+        self.unit_ms = 1200 / max(1, int(wpm))
+
+    def preview(self, text="K"):
+        """Short Morse sample at the current speed (after turning the knob).
+        Skipped while a real message is being listened to or played."""
+        if not self._busy.acquire(blocking=False):
+            return
+        try:
+            self._play_beeps(timeline(encode(text), self.unit_ms))
+        finally:
+            self._busy.release()
 
     @staticmethod
     def stt_available(lang):
@@ -104,14 +121,26 @@ class SpeechToMorse:
         return text
 
     # --- internals ------------------------------------------------------------
+    def _emit(self, kind, data):
+        if self.on_event:
+            try:
+                self.on_event(kind, data)
+            except Exception as e:
+                print(f"[s2m] on_event error: {e}", flush=True)
+
     def _session(self):
         try:
-            text = self.listen()
+            self._emit("listening", True)
+            try:
+                heard = text = self.listen()
+            finally:
+                self._emit("listening", False)
             if text and self.translate:
-                translated = self.translate(text)
-                print(f"[s2m] translated: {text!r} -> {translated!r}", flush=True)
-                text = translated
+                text = self.translate(text)
+                print(f"[s2m] translated: {heard!r} -> {text!r}", flush=True)
             if text:
+                self._emit("heard", {"heard": heard, "text": text,
+                                     "code": encode(text.translate(UMLAUTS))})
                 self.send(text)
         except Exception as e:
             print(f"[s2m] error: {e}", flush=True)

@@ -8,18 +8,30 @@
 // Python -> MCU: "play_morse"(code) blinks the Modulino LEDs, e.g. "... --- ..."
 // LED matrix (13x8): scrolling Morse tape, right to left.
 //   rows 1-2: what the user taps on button A    rows 5-6: Morse from speech-to-Morse
+// Modulino Knob: Morse output speed (right = faster), press = reset to default.
+//   -> "set_speed"(wpm) so Python plays the audio at the same speed.
+//   Python can ask the current speed with "get_speed".
 
 #include <Arduino_RouterBridge.h>
 #include <Arduino_LED_Matrix.h>
 #include <Modulino.h>
 
 ModulinoButtons buttons;
+ModulinoKnob knob;
 Arduino_LED_Matrix matrix;
 
 const unsigned long POLL_MS = 5;
 const unsigned long DEBOUNCE_MS = 15;
 const unsigned long LONG_PRESS_MS = 800;
-const unsigned long MORSE_UNIT_MS = 80;     // same as UNIT_MS in speech_to_morse.py
+// Morse output speed in words per minute (PARIS standard: dot = 1200 / wpm ms)
+const int DEFAULT_WPM = 15;                 // 80 ms dot, same as UNIT_MS in speech_to_morse.py
+const int MIN_WPM = 5;                      // 240 ms dot
+const int MAX_WPM = 30;                     // 40 ms dot
+const unsigned long SPEED_BAR_MS = 1500;    // show the speed bar this long after turning
+volatile int wpm = DEFAULT_WPM;
+unsigned long morseUnitMs = 1200 / DEFAULT_WPM;
+unsigned long lastSpeedChange = 0;
+bool knobWasPressed = false;
 
 bool stableState[3] = {false, false, false};
 bool lastRaw[3] = {false, false, false};
@@ -38,13 +50,48 @@ bool morseLedOn = false;
 // --- LED matrix tape ---
 const int MATRIX_W = 13;
 const int MATRIX_H = 8;
-const unsigned long TAPE_STEP_MS = 40;   // 1 column per 40 ms -> output dot = 2 px, dash = 6 px
+// 1 column per half dot -> output dot = 2 px, dash = 6 px at every speed
+unsigned long tapeStepMs() { return max(20UL, morseUnitMs / 2); }
 const uint8_t BRIGHT = 7;                // grayscale 0..7
 const uint8_t INPUT_ROWS[] = {1, 2};
 const uint8_t OUTPUT_ROWS[] = {5, 6};
 uint8_t tape[MATRIX_W * MATRIX_H] = {0};
 unsigned long lastTapeStep = 0;
 bool tapeEmpty = true;
+
+int getSpeed() {
+  return wpm;
+}
+
+void applySpeed(int newWpm, unsigned long now) {
+  if (newWpm == wpm) return;
+  wpm = newWpm;
+  morseUnitMs = 1200 / wpm;
+  lastSpeedChange = now;
+  Bridge.notify("set_speed", wpm);
+}
+
+// Knob position is relative to DEFAULT_WPM. Clamped, so turning past the limit
+// doesn't "wind up" (turning back reacts immediately).
+void updateKnob(unsigned long now) {
+  static unsigned long lastKnobPoll = 0;
+  if (now - lastKnobPoll < 20) return;   // knob is read over I2C, 50x per second is plenty
+  lastKnobPoll = now;
+  int pos = knob.get();
+  int target = DEFAULT_WPM + pos;
+  if (target < MIN_WPM || target > MAX_WPM) {
+    target = constrain(target, MIN_WPM, MAX_WPM);
+    knob.set(target - DEFAULT_WPM);
+  }
+  bool pressed = knob.isPressed();
+  if (pressed && !knobWasPressed) {   // press = back to default speed
+    knob.set(0);
+    target = DEFAULT_WPM;
+    lastSpeedChange = now;            // show the bar even if it was already default
+  }
+  knobWasPressed = pressed;
+  applySpeed(target, now);
+}
 
 void playMorse(String code) {
   morseIncoming = code;
@@ -55,8 +102,11 @@ void setup() {
   Bridge.begin();
   // provide_safe runs the callback in the loop thread.
   Bridge.provide_safe("play_morse", playMorse);
+  Bridge.provide("get_speed", getSpeed);
   Modulino.begin();
   buttons.begin();
+  knob.begin();
+  knob.set(0);                       // knob position 0 = DEFAULT_WPM
   buttons.setLeds(false, false, false);
   matrix.begin();
   matrix.setGrayscaleBits(3);
@@ -117,7 +167,7 @@ void updateMorse(unsigned long now) {
   if (morseLedOn) {
     buttons.setLeds(false, false, false);
     morseLedOn = false;
-    morseNext = now + MORSE_UNIT_MS;
+    morseNext = now + morseUnitMs;
     return;
   }
   if (morseIdx >= (int)morseOut.length()) {
@@ -128,21 +178,23 @@ void updateMorse(unsigned long now) {
   if (c == '.' || c == '-') {
     buttons.setLeds(true, true, true);
     morseLedOn = true;
-    morseNext = now + (c == '.' ? 1 : 3) * MORSE_UNIT_MS;
+    morseNext = now + (c == '.' ? 1 : 3) * morseUnitMs;
   } else {
-    morseNext = now + 2 * MORSE_UNIT_MS;  // ' ' or '/'
+    morseNext = now + 2 * morseUnitMs;  // ' ' or '/'
   }
 }
 
 // Shift the tape one column left and draw the current key/playback state on the right.
 // Stops redrawing once everything has scrolled out.
 void updateTape(unsigned long now) {
-  if (now - lastTapeStep < TAPE_STEP_MS) return;
+  if (now - lastTapeStep < tapeStepMs()) return;
   lastTapeStep = now;
 
   bool keyOn = stableState[0];
   bool outOn = morseLedOn;
-  if (tapeEmpty && !keyOn && !outOn) return;
+  bool showSpeed = lastSpeedChange && now - lastSpeedChange < SPEED_BAR_MS;
+  static bool speedShown = false;
+  if (tapeEmpty && !keyOn && !outOn && !showSpeed && !speedShown) return;
 
   tapeEmpty = true;
   for (int r = 0; r < MATRIX_H; r++) {
@@ -157,7 +209,19 @@ void updateTape(unsigned long now) {
   for (uint8_t r : OUTPUT_ROWS) tape[r * MATRIX_W + MATRIX_W - 1] = outOn ? BRIGHT : 0;
   if (keyOn || outOn) tapeEmpty = false;
 
-  matrix.draw(tape);
+  speedShown = showSpeed;
+  if (!showSpeed) {
+    matrix.draw(tape);
+    return;
+  }
+  // Speed bar on rows 3-4 (between the two lanes): longer bar = faster
+  uint8_t frame[MATRIX_W * MATRIX_H];
+  memcpy(frame, tape, sizeof(frame));
+  int len = 1 + (wpm - MIN_WPM) * (MATRIX_W - 1) / (MAX_WPM - MIN_WPM);
+  for (int r = 3; r <= 4; r++)
+    for (int c = 0; c < MATRIX_W; c++)
+      frame[r * MATRIX_W + c] = c < len ? BRIGHT : 0;
+  matrix.draw(frame);
 }
 
 void loop() {
@@ -167,6 +231,7 @@ void loop() {
   lastPoll = now;
 
   updateButtons(now);
+  updateKnob(now);
   updateMorse(now);
   updateTape(now);
 }
