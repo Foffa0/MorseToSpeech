@@ -66,8 +66,8 @@
   .who { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
   .main-text { font-size: 20px; font-weight: 600; }
   .sub-text { font-size: 16px; color: var(--muted); margin-top: 2px; }
-  .morse { display: flex; flex-wrap: wrap; gap: 4px 0; margin-top: 10px; }
-  .mword { display: flex; gap: 8px; margin-right: 20px; }
+  .morse { display: flex; flex-wrap: wrap; gap: 8px 0; margin-top: 10px; }
+  .mword { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-right: 20px; }
   .mletter { display: flex; flex-direction: column; align-items: center; }
   .msyms { font: 700 18px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.08em; }
   .mchar { font-size: 12px; color: var(--muted); margin-top: 3px; }
@@ -91,35 +91,40 @@
   .spark .hover-x { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
   .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
 
-  /* --- settings --- */
-  details.card { padding: 0; }
-  summary { cursor: pointer; padding: 16px 20px; font-weight: 600; list-style: none;
-            display: flex; justify-content: space-between; align-items: center; }
-  summary::-webkit-details-marker { display: none; }
-  summary::after { content: "▾"; color: var(--muted); }
-  details[open] summary::after { content: "▴"; }
-  .settings { padding: 0 20px 18px; }
-  .hint { color: var(--muted); font-size: 15px; margin: 0 0 10px; }
-  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px;
-             margin-bottom: 16px; }
-  .lang { min-height: 56px; border-radius: 12px; border: 2px solid var(--line); background: transparent;
-          color: var(--text); font: inherit; font-weight: 600; cursor: pointer; }
-  .lang[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-  .swap { min-height: 44px; padding: 0 18px; border-radius: 999px; border: 1px solid var(--line);
-          background: var(--card); color: var(--text); font: inherit; font-size: 16px; cursor: pointer;
-          margin-bottom: 16px; }
-  button:focus-visible, summary:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-  .flow { list-style: none; padding: 0; margin: 0; font-size: 16px; }
-  .flow li { padding: 8px 0; border-top: 1px solid var(--line); }
-  .flow li:first-child { border-top: 0; }
+  /* --- languages (prominent, at the top) --- */
+  .langs { border: 2px solid var(--accent); padding: 20px; }
+  .lang-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: end; }
+  .side-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  .side-title span { display: block; font-size: 14px; font-weight: 500; color: var(--muted); }
+  .segmented { display: flex; gap: 6px; padding: 5px; border-radius: 14px; background: var(--bg);
+               border: 1px solid var(--line); }
+  .lang { flex: 1; min-height: 60px; border-radius: 10px; border: 0; background: transparent; color: var(--text);
+          font: inherit; font-size: 20px; font-weight: 700; cursor: pointer; }
+  .lang:hover { background: var(--line); }
+  .lang[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .swap { width: 56px; height: 56px; margin-bottom: 7px; border-radius: 50%; border: 1px solid var(--line);
+          background: var(--card); color: var(--text); font: inherit; font-size: 24px; cursor: pointer; }
+  .swap:hover { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .flow { list-style: none; padding: 0; margin: 16px 0 0; display: flex; flex-wrap: wrap; gap: 6px 24px;
+          font-size: 16px; }
   .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
          border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
   .tag.on { color: var(--ok); border-color: var(--ok); }
-  .warnings { list-style: none; padding: 0; margin: 8px 0 0; }
+  .warnings { list-style: none; padding: 0; margin: 4px 0 0; }
   .warnings li { background: var(--warn-bg); color: var(--warn-text); border-radius: 10px;
                  padding: 8px 12px; margin-top: 8px; font-size: 15px; }
-  .status { min-height: 22px; color: var(--muted); font-size: 15px; margin-top: 10px; }
+  .status { color: var(--muted); font-size: 15px; margin: 8px 0 0; }
+  .status:empty, .warnings:empty { display: none; }
   .status.error { color: var(--live); }
+  @media (max-width: 600px) {
+    .lang-grid { grid-template-columns: 1fr; }
+    .swap { justify-self: center; margin: 0; transform: rotate(90deg); }
+  }
+
+  /* --- device statistics (bottom, low-key) --- */
+  .device { background: transparent; }
+  .device .tile { background: var(--card); }
   .offline { background: var(--warn-bg); color: var(--warn-text); border-radius: 12px; padding: 10px 14px;
              margin-bottom: 12px; }
 </style>
@@ -130,12 +135,29 @@
     <h1>MorseToSpeech</h1>
     <div class="chips" aria-live="polite">
       <span class="chip live" id="chip-listening" hidden>Listening…</span>
-      <span class="chip" id="chip-langs"></span>
-      <span class="chip" id="chip-speed"></span>
+      <span class="chip" id="chip-speed" title="Morse output speed (Modulino Knob)"></span>
     </div>
   </header>
 
   <div class="offline" id="offline" role="alert" hidden>Can't reach the device. Is the app running?</div>
+
+  <section class="card langs" aria-labelledby="langs-label">
+    <p class="label" id="langs-label">Languages</p>
+    <div class="lang-grid">
+      <div>
+        <div class="side-title" id="user-label">You <span>tap &amp; feel Morse</span></div>
+        <div class="segmented" id="user-options" role="group" aria-labelledby="user-label"></div>
+      </div>
+      <button class="swap" id="swap" type="button" aria-label="Swap languages" title="Swap languages">⇄</button>
+      <div>
+        <div class="side-title" id="partner-label">Partner <span>speaks &amp; listens</span></div>
+        <div class="segmented" id="partner-options" role="group" aria-labelledby="partner-label"></div>
+      </div>
+    </div>
+    <ul class="flow" id="flow"></ul>
+    <ul class="warnings" id="warnings"></ul>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
+  </section>
 
   <section class="card" aria-labelledby="typing-label">
     <p class="label" id="typing-label">Now typing</p>
@@ -154,8 +176,9 @@
     </div>
   </section>
 
-  <section class="card" aria-labelledby="device-label">
-    <p class="label" id="device-label">Device</p>
+
+  <section class="card device" aria-labelledby="device-label">
+    <p class="label" id="device-label">Device statistics</p>
     <div class="tiles">
       <div class="tile">
         <div class="name">CPU</div>
@@ -194,22 +217,6 @@
     </div>
     <p class="note" id="stats-note"></p>
   </section>
-
-  <details class="card" id="settings">
-    <summary>Languages</summary>
-    <div class="settings">
-      <p class="label" id="user-label">You (Morse)</p>
-      <p class="hint">The language you tap and receive Morse in.</p>
-      <div class="options" id="user-options" role="group" aria-labelledby="user-label"></div>
-      <p class="label" id="partner-label">Conversation partner (speech)</p>
-      <p class="hint">The language your partner speaks and hears.</p>
-      <div class="options" id="partner-options" role="group" aria-labelledby="partner-label"></div>
-      <button class="swap" id="swap" type="button">⇅ Swap languages</button>
-      <ul class="flow" id="flow"></ul>
-      <ul class="warnings" id="warnings"></ul>
-      <p class="status" id="status" role="status" aria-live="polite"></p>
-    </div>
-  </details>
 </main>
 
 <script>
@@ -392,8 +399,6 @@
     const s = langState;
     renderOptions("user-options", "user");
     renderOptions("partner-options", "partner");
-    el("chip-langs").textContent = s.user === s.partner
-      ? langName(s.user) : `${langName(s.user)} ⇄ ${langName(s.partner)}`;
 
     const same = s.user === s.partner;
     const flow = el("flow");
@@ -401,7 +406,7 @@
     const rows = [
       [`You tap <b>${langName(s.user)}</b> → partner hears <b>${langName(s.translating_out ? s.partner : s.user)}</b>`,
        same ? "same language" : s.translating_out ? "translated" : "not translated", s.translating_out],
-      [`Partner speaks <b>${langName(s.partner)}</b> → you get Morse in <b>${langName(s.translating_in ? s.user : s.partner)}</b>`,
+      [`Partner speaks <b>${langName(s.partner)}</b> → you feel Morse in <b>${langName(s.translating_in ? s.user : s.partner)}</b>`,
        same ? "same language" : s.translating_in ? "translated" : "not translated", s.translating_in],
     ];
     for (const [html, tag, on] of rows) {
@@ -416,8 +421,6 @@
       li.textContent = w;
       warn.appendChild(li);
     }
-    // show the settings right away if something needs attention
-    if (s.warnings.length && !el("settings").dataset.touched) el("settings").open = true;
   }
 
   function setStatus(text, isError) {
@@ -550,7 +553,6 @@
   pollStats();
 
   el("swap").addEventListener("click", () => langState && saveLangs(langState.partner, langState.user));
-  el("settings").addEventListener("toggle", () => { el("settings").dataset.touched = "1"; });
 
   loadLangs().then(poll);
   setInterval(loadLangs, 10000);
