@@ -66,24 +66,22 @@ def speak():
     speaker.say(sentence)
 
 
-def wake():
+def activate_listening():
     """Wake word (Nicla Voice) or long press on C: listen to the partner, answer in Morse."""
     print("[wake] activating speech-to-Morse", flush=True)
     speech_to_morse.activate()
 
 
-Bridge.provide("wake", wake)
+Bridge.provide("wake", activate_listening)  # long press on C (MCU sketch)
 Bridge.provide("key_down", key_down)
 Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
 Bridge.provide("speak", speak)
 # --- Wake word (Nicla Voice over USB, see wake.py) ---------------------------
 def on_wake(label):
-    """Called once per detected wake word.
-
-    TODO (teammates): start recording / speech-to-text / Morse translation here.
-    """
-    print(f"Wake word detected ({label}) - start listening")
+    """Called once per detected wake word (from the Nicla Voice, see wake.py)."""
+    print(f"Wake word detected ({label})", flush=True)
+    activate_listening()
 
 
 wake.start(on_wake)
