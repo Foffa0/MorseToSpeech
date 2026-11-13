@@ -1,8 +1,6 @@
 """Laptop tests for the decoder: python -m pytest python/test_morse.py"""
 
-from morse import MORSE_TABLE, MorseDecoder
-
-CHAR_TO_MORSE = {v: k for k, v in MORSE_TABLE.items()}
+from morse import CHAR_TO_MORSE, MorseDecoder, encode, timeline
 
 
 class Sim:
@@ -115,3 +113,31 @@ def test_backspace():
     assert sim.dec.text() == "H"
     sim.wait(1500)                           # must not re-speak the edited word
     assert sim.words == ["HI"]
+
+
+# --- speech -> Morse encoding -----------------------------------------------
+def test_encode():
+    assert encode("sos") == "... --- ..."
+    assert encode("Hi  you!") == ".... .. / -.-- --- ..-"   # '!' unknown -> skipped
+    assert encode("!!!") == ""
+
+
+def test_timeline_standard_timing():
+    assert timeline(encode("ET A"), unit_ms=100) == [
+        (True, 100), (False, 300), (True, 300),   # E, letter gap, T
+        (False, 700),                              # word gap
+        (True, 100), (False, 100), (True, 300),   # A
+    ]
+
+
+def test_roundtrip_encode_then_decode():
+    """What we send as Morse must be decodable by our own decoder."""
+    sim = Sim()
+    # unit 200 -> word gap 1400 ms, above the decoder's MIN_WORD_GAP_MS (1200)
+    for on, ms in timeline(encode("I NEED HELP"), unit_ms=200):
+        if on:
+            sim.press(ms)
+        else:
+            sim.wait(ms)
+    sim.wait(4000)
+    assert sim.dec.take_sentence() == "I NEED HELP"

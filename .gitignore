@@ -4,3 +4,4 @@
 # Piper voice models (large, download separately)
 python/voices/
 __pycache__/
+python/models/

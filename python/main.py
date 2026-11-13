@@ -6,9 +6,20 @@ import time
 from arduino.app_utils import App, Bridge
 
 from morse import MorseDecoder
+from speech_to_morse import SpeechToMorse
 from tts import Speaker
 
 speaker = Speaker()
+
+
+def blink_morse_on_mcu(text, code):
+    try:
+        Bridge.notify("play_morse", code)   # Modulino LEDs blink the Morse code
+    except Exception as e:
+        print(f"[s2m] could not send to MCU: {e}", flush=True)
+
+
+speech_to_morse = SpeechToMorse(on_morse=blink_morse_on_mcu)
 lock = threading.Lock()
 
 
@@ -54,6 +65,13 @@ def speak():
     speaker.say(sentence)
 
 
+def wake():
+    """Wake word (Nicla Voice) or long press on C: listen to the partner, answer in Morse."""
+    print("[wake] activating speech-to-Morse", flush=True)
+    speech_to_morse.activate()
+
+
+Bridge.provide("wake", wake)
 Bridge.provide("key_down", key_down)
 Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
@@ -66,5 +84,6 @@ def loop():
     time.sleep(0.02)
 
 
-print("MorseToSpeech ready. Button A = Morse key, B = backspace, C = speak sentence.", flush=True)
+print("MorseToSpeech ready. Button A = Morse key, B = backspace, C = speak sentence, "
+      "hold C = listen (speech -> Morse).", flush=True)
 App.run(user_loop=loop)
