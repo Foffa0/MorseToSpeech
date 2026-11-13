@@ -37,7 +37,7 @@ The UNO Q's 13×8 matrix shows a scrolling Morse tape, right to left, 40 ms per 
 - **rows 5–6:** Morse coming from speech-to-Morse (dot = 2 px, dash = 6 px)
 
 ## Speech → Morse
-Hold **C** (≥ 0.8 s), or later say the wake word to the Nicla Voice. The UNO Q then listens to the conversation partner,
+Hold **C** (≥ 0.8 s), or say the wake word to the Nicla Voice. The UNO Q then listens to the conversation partner,
 transcribes offline with Vosk, and outputs the sentence as Morse beeps on the headset and blinks on the Modulino LEDs.
 
 Download the STT model into `python/models/`:
@@ -48,7 +48,14 @@ unzip vosk-model-small-en-us-0.15.zip && rm vosk-model-small-en-us-0.15.zip
 ```
 Test on the laptop: `python speech_to_morse.py "hello"` (beeps only) or `python speech_to_morse.py --listen`.
 
-**Connecting the Nicla Voice:** everything goes through `wake()` in `python/main.py`.
-- Via pin: on the wake word, the Nicla sets a pin HIGH briefly. Connect it to D2 and set `USE_NICLA_PIN = true` in the sketch.
-  The Nicla's I/O is 1.8 V, so use a level shifter.
-- Via USB serial: the Nicla prints `WAKE`, Python reads the serial port and calls `wake()`.
+## Wake word (Nicla Voice)
+The Nicla Voice listens for the built-in **"Alexa"** model and sends `WAKE <label>` over USB serial (115200 baud).
+`python/wake.py` reads it and calls `on_wake()` in `python/main.py`, which starts speech → Morse.
+
+1. Plug the Nicla into the UNO Q with a **Micro-USB data cable**. Use a USB-C hub with power passthrough, since the UNO Q has one USB-C port.
+2. In the Arduino IDE, install the **Arduino Mbed OS Nicla Boards** core and select **Arduino Nicla Voice**.
+3. Load the NDP120 firmware and Alexa model once (see "Updating the NDP120 firmware" in the
+   [Nicla Voice manual](https://docs.arduino.cc/tutorials/nicla-voice/user-manual/)).
+4. Flash `nicla_wake/nicla_wake.ino`. The LED blinks green when ready and blue on each wake word.
+
+`NICLA_PORT` overrides the automatic port detection. A custom wake word can be trained later in Edge Impulse.
