@@ -1,256 +1,376 @@
-// Nicla Voice wake-word trigger.
-// Board: "Arduino Nicla Voice" (core: Arduino Mbed OS Nicla Boards).
-// NOT part of the App Lab sketch (different board) - flash it with Arduino IDE / arduino-cli.
-//
-// The NDP120 runs the keyword model on its own. On a match we send one line
-//   WAKE <label>\n
-// over USB serial (115200 baud) to the UNO Q. Every other line starts with "#" (debug/status).
-//
-// ---- Serial status lines (all start with "#") ----------------------------------------------
-//   # boot  fw=... reset=<reason> raw=0x..   first line after every (re)start. If you see this
-//                                            repeatedly in the host log, the board keeps resetting.
-//                                            reset=power-on/brownout -> supply problem (USB power!)
-//                                            reset=watchdog          -> a stage hung
-//                                            reset=soft              -> we reset ourselves (NDP error)
-//   # stage <n>/<m> <what>                   progress through setup(); the last one printed before
-//                                            silence is where it hung/crashed.
-//   # ready  setup_ms=...                    setup finished, listening.
-//   # hb up=<s>s wakes=<n> matches=<n> ...   heartbeat every HEARTBEAT_MS while alive.
-//   # match <label> ...                      model matched (even if suppressed by cooldown).
-//   # ERROR ...                              fatal NDP error, board restarts itself after a few s.
-//
-// ---- LED codes ------------------------------------------------------------------------------
-//   magenta (solid)       setup in progress (loading models)
-//   green, 1 long blink   ready
-//   green, tiny blink     heartbeat every HEARTBEAT_MS (alive and listening)
-//   blue, 1 blink         wake word detected and sent
-//   red, 10 fast blinks   fatal NDP error, then automatic restart
-//   (nothing / odd pattern with the above never appearing: this sketch is NOT what is running,
-//    or the board is in the bootloader / browning out before setup() runs.)
+/*
+  nicla_wake.ino - "Alexa" wake-word detector for the Arduino Nicla Voice.
+
+  Uses the standard Syntiant packages that are already stored on the Nicla's
+  external flash (mcu_fw_120_v91, dsp_firmware_v91, alexa_334_NDP120_B0_v11_v91).
+
+  Serial protocol (USB, 115200 8N1, '\n' terminated) - consumed by python/wake.py:
+      WAKE <label>      one line per detected wake word, e.g. "WAKE Alexa"
+      # <text>          debug / status line (only logged by the backend)
+  Library error messages (printf from the NDP library) may also appear; they
+  never start with "WAKE".
+
+  A heartbeat "# alive ..." is sent every 5 s (the backend warns after 10 s of
+  silence).
+
+  Single-character commands you can type in the Serial Monitor:
+      s  status        t  send a test "WAKE test" line
+      r  reboot        h  help
+
+  Robustness:
+    * NDP callbacks run in the library's small "events" thread. They only bump
+      counters; all printing / LED work happens in loop().
+    * The NDP error callback never blocks (the stock example loops forever).
+    * Hardware watchdog: if anything hangs or crashes, the board reboots.
+    * Init failure or an error storm -> error mode (red blink) -> auto reboot.
+    * Hardware UART (via the on-board USB bridge, no flow control): writes never
+      block waiting for a host, so an unplugged/closed port cannot stall the sketch.
+
+  LED: yellow = loading, green flash = ready, blue flash = wake word,
+       blinking red = error (reboots automatically).
+*/
 
 #include "NDP.h"
+#include <stdarg.h>
 
-const char FW_VERSION[] = "wake-1.2";
+// ----------------------------------------------------------------------------
+// Configuration
+// ----------------------------------------------------------------------------
+static const char *FW_MCU   = "mcu_fw_120_v91.synpkg";
+static const char *FW_DSP   = "dsp_firmware_v91.synpkg";
+static const char *FW_MODEL = "alexa_334_NDP120_B0_v11_v91.synpkg";
 
-const unsigned long COOLDOWN_MS = 2000;   // ignore repeated matches within this window
-const unsigned long HEARTBEAT_MS = 5000;  // serial + LED heartbeat period (0 = off)
-const bool HEARTBEAT_LED = true;          // short green flash with each heartbeat
-const uint32_t WATCHDOG_MS = 30000;       // restart if loop()/setup() stalls this long (0 = off)
+static const uint32_t SERIAL_BAUD        = 115200;
+static const char    *WAKE_KEYWORD       = "alexa";  // case-insensitive substring of the label
+static const uint32_t WAKE_COOLDOWN_MS   = 1500;     // ignore repeated matches of one utterance
+static const uint32_t HEARTBEAT_MS       = 5000;
+static const uint32_t WATCHDOG_MS        = 20000;    // must cover the package loading in setup()
+static const uint32_t ERROR_REBOOT_MS    = 30000;    // stay in error mode this long, then reboot
+static const uint32_t ERROR_WINDOW_MS    = 10000;
+static const uint32_t ERROR_STORM_COUNT  = 20;       // > this many NDP errors per window -> error mode
+static const uint32_t LED_FLASH_MS       = 300;
+static const uint32_t LOOP_DELAY_MS      = 5;
+static const int      MAX_LABELS         = 32;       // NDPClass::MAX_LABELS
 
-volatile bool matchPending = false;
-volatile uint32_t matchCount = 0;         // raw model matches
-char matchLabel[32] = "";
-unsigned long lastWakeMs = 0;
-uint32_t wakeCount = 0;                   // WAKE lines actually sent
-uint32_t suppressedCount = 0;             // matches dropped by cooldown
-volatile bool ndpFailed = false;
+// ----------------------------------------------------------------------------
+// State shared with the NDP "events" thread (single writer there, read in loop)
+// ----------------------------------------------------------------------------
+static volatile uint32_t ndpMatchCount = 0;
+static volatile int      ndpLastMatch  = -1;
+static volatile uint32_t ndpErrorCount = 0;
+static volatile uint32_t ndpEventCount = 0;
 
-// ---------------------------------------------------------------------------------------------
-// Watchdog (optional, only if the core exposes it)
-// ---------------------------------------------------------------------------------------------
-#if defined(DEVICE_WATCHDOG)
-#define HAVE_WDT 1
-#else
-#define HAVE_WDT 0
-#endif
+static void onNdpMatch(int idx) {   // events thread: keep it tiny
+  ndpLastMatch = idx;
+  ndpMatchCount = ndpMatchCount + 1;
+}
+static void onNdpError() { ndpErrorCount = ndpErrorCount + 1; }
+static void onNdpEvent() { ndpEventCount = ndpEventCount + 1; }
 
-void wdtStart()
-{
-#if HAVE_WDT
-  if (WATCHDOG_MS) mbed::Watchdog::get_instance().start(WATCHDOG_MS);
-#endif
+// ----------------------------------------------------------------------------
+// Loop-only state
+// ----------------------------------------------------------------------------
+enum State { STATE_BOOT, STATE_RUNNING, STATE_ERROR };
+static State state = STATE_BOOT;
+
+static uint32_t seenMatches = 0;
+static uint32_t seenErrors  = 0;
+static uint32_t wakeCount   = 0;
+static bool     hasWoken    = false;
+static uint32_t lastWakeMs  = 0;
+static uint32_t lastHeartbeatMs = 0;
+
+static bool     ledActive   = false;
+static uint32_t ledOffAtMs  = 0;
+
+static uint32_t errorSinceMs = 0;
+static char     errorReason[64] = "";
+static uint32_t errWindowStartMs = 0;
+static uint32_t errWindowCount   = 0;
+
+static const char *resetReason = "unknown";
+
+// ----------------------------------------------------------------------------
+// Helpers
+// ----------------------------------------------------------------------------
+
+// Formats one complete line and writes it with a single call so it is not
+// torn apart by other output.
+static void sendLine(const char *fmt, ...) {
+  char buf[160];
+  va_list ap;
+  va_start(ap, fmt);
+  int n = vsnprintf(buf, sizeof(buf) - 1, fmt, ap);
+  va_end(ap);
+  if (n < 0) return;
+  if (n > (int)sizeof(buf) - 2) n = sizeof(buf) - 2;
+  buf[n++] = '\n';
+  Serial.write((const uint8_t *)buf, n);
 }
 
-void wdtKick()
-{
-#if HAVE_WDT
-  if (WATCHDOG_MS) mbed::Watchdog::get_instance().kick();
-#endif
+static void kickWatchdog() { mbed::Watchdog::get_instance().kick(); }
+
+static void ledSet(RGBColors c) { nicla::leds.setColor(c); }
+
+static void ledFlash(RGBColors c, uint32_t ms) {
+  ledSet(c);
+  ledActive = true;
+  ledOffAtMs = millis() + ms;
 }
 
-// ---------------------------------------------------------------------------------------------
-// Reset reason (nRF52832 RESETREAS). Note: brownout / power loss does NOT set any bit, so a value
-// of 0 means "power-on reset or brownout" - on a board that was not just plugged in, suspect power.
-// ---------------------------------------------------------------------------------------------
-uint32_t readResetReason()
-{
-#if defined(NRF_POWER)
-  uint32_t r = NRF_POWER->RESETREAS;
-  NRF_POWER->RESETREAS = 0xFFFFFFFF; // clear (write 1 to clear)
-  return r;
-#else
-  return 0xFFFFFFFF;
-#endif
+static const char *labelName(int idx) {
+  if (idx < 0 || idx >= MAX_LABELS) return "?";
+  char **labels = NDP.getLabels();
+  if (!labels || !labels[idx]) return "?";
+  const char *l = labels[idx];
+  const char *colon = strchr(l, ':');   // "NN0:Alexa" -> "Alexa"
+  return colon ? colon + 1 : l;
 }
 
-const char *resetReasonText(uint32_t r)
-{
-  if (r == 0xFFFFFFFF) return "unknown";
-  if (r == 0) return "power-on/brownout";
-  if (r & 0x00000002) return "watchdog";
-  if (r & 0x00000004) return "soft";
-  if (r & 0x00000008) return "lockup";
-  if (r & 0x00000001) return "reset-pin";
-  return "other";
-}
-
-// ---------------------------------------------------------------------------------------------
-// LED helpers
-// ---------------------------------------------------------------------------------------------
-void blinkMs(RGBColors color, unsigned int ms)
-{
-  nicla::leds.begin();
-  nicla::leds.setColor(color);
-  delay(ms);
-  nicla::leds.setColor(off);
-  nicla::leds.end();
-}
-
-void blink(RGBColors color) { blinkMs(color, 200); }
-
-// ---------------------------------------------------------------------------------------------
-// Fatal NDP error: report, blink red, then restart instead of hanging forever.
-// ---------------------------------------------------------------------------------------------
-void onError()
-{
-  // Runs from the NDP error callback: keep it short and do not return into the library.
-  Serial.println("# ERROR ndp fatal error - restarting in ~4 s");
-  for (int i = 0; i < 10; i++)
-  {
-    nicla::leds.begin();
-    nicla::leds.setColor(red);
-    delay(200);
-    nicla::leds.setColor(off);
-    delay(200);
-    nicla::leds.end();
+static bool containsIgnoreCase(const char *haystack, const char *needle) {
+  size_t nl = strlen(needle);
+  for (; *haystack; haystack++) {
+    size_t i = 0;
+    while (i < nl && haystack[i] && tolower((unsigned char)haystack[i]) == tolower((unsigned char)needle[i])) i++;
+    if (i == nl) return true;
   }
-  Serial.println("# ERROR restarting now");
+  return false;
+}
+
+static const char *stateName() {
+  switch (state) {
+    case STATE_BOOT:    return "boot";
+    case STATE_RUNNING: return "ok";
+    default:            return "error";
+  }
+}
+
+static void readResetReason() {
+  uint32_t r = NRF_POWER->RESETREAS;
+  NRF_POWER->RESETREAS = 0xFFFFFFFF;   // write-1-to-clear
+  if      (r & POWER_RESETREAS_DOG_Msk)      resetReason = "watchdog";
+  else if (r & POWER_RESETREAS_LOCKUP_Msk)   resetReason = "lockup";
+  else if (r & POWER_RESETREAS_SREQ_Msk)     resetReason = "software";
+  else if (r & POWER_RESETREAS_RESETPIN_Msk) resetReason = "reset-pin";
+  else if (r == 0)                           resetReason = "power-on";
+}
+
+static void reboot(const char *why) {
+  sendLine("# rebooting: %s", why);
+  Serial.flush();
   delay(50);
   NVIC_SystemReset();
 }
 
-void onMatch(char *label)
-{
-  if (label)
-  {
-    strncpy(matchLabel, label, sizeof(matchLabel) - 1);
-    matchLabel[sizeof(matchLabel) - 1] = '\0';
-  }
-  else
-  {
-    strcpy(matchLabel, "alexa");
-  }
-  matchCount++;
-  matchPending = true;
+static void enterError(const char *why) {
+  if (state == STATE_ERROR) return;
+  state = STATE_ERROR;
+  errorSinceMs = millis();
+  strncpy(errorReason, why, sizeof(errorReason) - 1);
+  errorReason[sizeof(errorReason) - 1] = '\0';
+  sendLine("# ERROR %s - rebooting in %lu s", errorReason, (unsigned long)(ERROR_REBOOT_MS / 1000));
 }
 
-void stage(int n, int total, const char *what)
-{
-  Serial.print("# stage ");
-  Serial.print(n);
-  Serial.print("/");
-  Serial.print(total);
-  Serial.print(" ");
-  Serial.println(what);
-  wdtKick();
+static void printLabels() {
+  char **labels = NDP.getLabels();
+  for (int i = 0; i < MAX_LABELS && labels && labels[i]; i++) {
+    sendLine("# label %d: %s", i, labels[i]);
+  }
 }
 
-// ---------------------------------------------------------------------------------------------
-void setup()
-{
-  unsigned long t0 = millis();
-  uint32_t reason = readResetReason();
+static void printStatus() {
+  uint32_t now = millis();
+  sendLine("# status state=%s up=%lus wakes=%lu matches=%lu events=%lu errors=%lu reset=%s",
+           stateName(), (unsigned long)(now / 1000), (unsigned long)wakeCount,
+           (unsigned long)ndpMatchCount, (unsigned long)ndpEventCount,
+           (unsigned long)ndpErrorCount, resetReason);
+  if (hasWoken) sendLine("# last wake %lu ms ago", (unsigned long)(now - lastWakeMs));
+  if (state == STATE_ERROR) sendLine("# error: %s", errorReason);
+  printLabels();
+}
 
-  Serial.begin(115200);
-  // Do NOT wait for a host (while(!Serial)): on the UNO Q the port may open late or never.
-  delay(300); // give the USB CDC a moment so the first lines are not lost
+static void printHelp() {
+  sendLine("# commands: s=status t=test-wake r=reboot h=help");
+}
 
-  Serial.print("# boot fw=");
-  Serial.print(FW_VERSION);
-  Serial.print(" reset=");
-  Serial.print(resetReasonText(reason));
-  Serial.print(" raw=0x");
-  Serial.println(reason, HEX);
+// ----------------------------------------------------------------------------
+// NDP init (blocking, only called from setup)
+// ----------------------------------------------------------------------------
+static bool loadStep(const char *what, bool ok, uint32_t errorsBefore) {
+  kickWatchdog();
+  if (!ok || ndpErrorCount != errorsBefore) {
+    char why[64];
+    snprintf(why, sizeof(why), "init failed at %s", what);
+    enterError(why);
+    return false;
+  }
+  sendLine("# %s ok", what);
+  return true;
+}
 
-  wdtStart();
+static bool initNdp() {
+  NDP.onError(mbed::callback(onNdpError));
+  NDP.onMatch(mbed::callback(onNdpMatch));
+  NDP.onEvent(mbed::callback(onNdpEvent));
 
-  stage(1, 6, "nicla::begin");
+  uint32_t e = ndpErrorCount;
+  sendLine("# loading %s", FW_MCU);
+  if (!loadStep(FW_MCU, NDP.begin(FW_MCU) == 1, e)) return false;
+
+  e = ndpErrorCount;
+  sendLine("# loading %s", FW_DSP);
+  if (!loadStep(FW_DSP, NDP.load(FW_DSP) == 1, e)) return false;
+
+  e = ndpErrorCount;
+  sendLine("# loading %s", FW_MODEL);
+  if (!loadStep(FW_MODEL, NDP.load(FW_MODEL) == 1, e)) return false;
+
+  e = ndpErrorCount;
+  if (!loadStep("model info", NDP.getInfo() == 1, e)) return false;
+  if (!NDP.getLabels() || !NDP.getLabels()[0]) {
+    enterError("model has no labels");
+    return false;
+  }
+  printLabels();
+
+  e = ndpErrorCount;
+  if (!loadStep("microphone", NDP.turnOnMicrophone() == 0, e)) return false;
+
+  e = ndpErrorCount;
+  NDP.interrupts();
+  if (!loadStep("interrupts", true, e)) return false;
+
+  return true;
+}
+
+// ----------------------------------------------------------------------------
+// Loop tasks (all non-blocking)
+// ----------------------------------------------------------------------------
+static void handleMatches() {
+  uint32_t m = ndpMatchCount;
+  if (m == seenMatches) return;
+  uint32_t coalesced = m - seenMatches - 1;
+  seenMatches = m;
+
+  int idx = ndpLastMatch;
+  const char *name = labelName(idx);
+  if (coalesced) sendLine("# %lu match(es) coalesced", (unsigned long)coalesced);
+
+  if (!containsIgnoreCase(name, WAKE_KEYWORD)) {
+    sendLine("# match '%s' (idx %d) ignored - not the wake word", name, idx);
+    return;
+  }
+
+  uint32_t now = millis();
+  if (hasWoken && now - lastWakeMs < WAKE_COOLDOWN_MS) {
+    sendLine("# match '%s' ignored (cooldown, %lu ms since last wake)", name,
+             (unsigned long)(now - lastWakeMs));
+    return;
+  }
+
+  hasWoken = true;
+  lastWakeMs = now;
+  wakeCount++;
+  sendLine("WAKE %s", name);   // the line the backend acts on - send it first
+  ledFlash(blue, LED_FLASH_MS);
+}
+
+static void handleErrors() {
+  uint32_t e = ndpErrorCount;
+  if (e == seenErrors) return;
+  uint32_t fresh = e - seenErrors;
+  seenErrors = e;
+  sendLine("# NDP error x%lu (total %lu)", (unsigned long)fresh, (unsigned long)e);
+
+  uint32_t now = millis();
+  if (now - errWindowStartMs > ERROR_WINDOW_MS) {
+    errWindowStartMs = now;
+    errWindowCount = 0;
+  }
+  errWindowCount += fresh;
+  if (errWindowCount > ERROR_STORM_COUNT && state == STATE_RUNNING) {
+    enterError("too many NDP errors");
+  }
+}
+
+static void handleSerialCommands() {
+  for (int i = 0; i < 16 && Serial.available() > 0; i++) {   // bounded per loop
+    int c = Serial.read();
+    switch (c) {
+      case 's': case 'S': printStatus(); break;
+      case 't': case 'T':
+        wakeCount++;
+        sendLine("WAKE test");
+        ledFlash(blue, LED_FLASH_MS);
+        break;
+      case 'r': case 'R': reboot("requested"); break;
+      case 'h': case 'H': case '?': printHelp(); break;
+      default: break;   // ignore newlines and noise
+    }
+  }
+}
+
+static void handleHeartbeat(uint32_t now) {
+  if (now - lastHeartbeatMs < HEARTBEAT_MS) return;
+  lastHeartbeatMs = now;
+  sendLine("# alive state=%s up=%lus wakes=%lu errors=%lu", stateName(),
+           (unsigned long)(now / 1000), (unsigned long)wakeCount, (unsigned long)ndpErrorCount);
+}
+
+static void handleLed(uint32_t now) {
+  if (state == STATE_ERROR) {
+    ledSet(((now / 250) % 2) ? red : off);
+    ledActive = false;
+    return;
+  }
+  if (ledActive && (int32_t)(now - ledOffAtMs) >= 0) {
+    ledSet(off);
+    ledActive = false;
+  }
+}
+
+// ----------------------------------------------------------------------------
+// Arduino entry points
+// ----------------------------------------------------------------------------
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  readResetReason();
+  mbed::Watchdog::get_instance().start(WATCHDOG_MS);
+
+  sendLine("# nicla_wake booting (reset reason: %s)", resetReason);
+
   nicla::begin();
   nicla::disableLDO();
   nicla::leds.begin();
-  nicla::leds.setColor(magenta); // "setup in progress"
+  ledSet(yellow);
+  kickWatchdog();
 
-  NDP.onError(onError);
-  NDP.onMatch(onMatch);
-
-  stage(2, 6, "NDP.begin mcu firmware");
-  NDP.begin("mcu_fw_120_v91.synpkg");
-  stage(3, 6, "load dsp firmware");
-  NDP.load("dsp_firmware_v91.synpkg");
-  stage(4, 6, "load model");
-  // Swap this for "ei_model.synpkg" once a custom wake name is trained in Edge Impulse.
-  NDP.load("alexa_334_NDP120_B0_v11_v91.synpkg");
-  stage(5, 6, "getInfo (label table)");
-  // Required: fills the label table. Without it the library passes a NULL label to onMatch
-  // and the board crashes on the first detection.
-  NDP.getInfo();
-  stage(6, 6, "microphone + interrupts on");
-  NDP.turnOnMicrophone();
-  NDP.interrupts();
-  nicla::leds.setColor(off);
-  nicla::leds.end();
-
-  Serial.print("# ready setup_ms=");
-  Serial.println(millis() - t0);
-  blink(green);
-  lastWakeMs = millis() - COOLDOWN_MS; // allow an immediate first wake
+  if (initNdp()) {
+    state = STATE_RUNNING;
+    seenErrors = ndpErrorCount;
+    seenMatches = ndpMatchCount;
+    ledFlash(green, 500);
+    sendLine("# ready - listening for \"Alexa\" (cooldown %lu ms)", (unsigned long)WAKE_COOLDOWN_MS);
+    printHelp();
+  }
+  lastHeartbeatMs = millis();
 }
 
-// ---------------------------------------------------------------------------------------------
-void loop()
-{
-  static unsigned long lastHb = 0;
-  unsigned long now = millis();
+void loop() {
+  kickWatchdog();
+  uint32_t now = millis();
 
-  wdtKick();
+  handleSerialCommands();
 
-  if (matchPending)
-  {
-    matchPending = false;
-    if (now - lastWakeMs >= COOLDOWN_MS)
-    {
-      lastWakeMs = now;
-      wakeCount++;
-      Serial.print("WAKE ");
-      Serial.println(matchLabel);
-      Serial.print("# match ");
-      Serial.print(matchLabel);
-      Serial.print(" sent n=");
-      Serial.println(wakeCount);
-      blink(blue);
-    }
-    else
-    {
-      suppressedCount++;
-      Serial.print("# match ");
-      Serial.print(matchLabel);
-      Serial.println(" suppressed (cooldown)");
-    }
+  if (state == STATE_RUNNING) {
+    handleMatches();
+    handleErrors();
+  } else if (state == STATE_ERROR && now - errorSinceMs > ERROR_REBOOT_MS) {
+    reboot(errorReason);
   }
 
-  if (HEARTBEAT_MS && now - lastHb >= HEARTBEAT_MS)
-  {
-    lastHb = now;
-    Serial.print("# hb up=");
-    Serial.print(now / 1000);
-    Serial.print("s wakes=");
-    Serial.print(wakeCount);
-    Serial.print(" matches=");
-    Serial.print((unsigned long)matchCount);
-    Serial.print(" suppressed=");
-    Serial.println(suppressedCount);
-    if (HEARTBEAT_LED) blinkMs(green, 30);
-  }
+  handleHeartbeat(now);
+  handleLed(now);
 
-  delay(10);
+  delay(LOOP_DELAY_MS);   // yields to the NDP events thread
 }
