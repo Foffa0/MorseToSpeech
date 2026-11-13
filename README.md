@@ -28,6 +28,14 @@ Tap Morse code on a button and the Arduino UNO Q speaks it out loud, fully offli
 cd python && python -m pytest test_morse.py
 ```
 
+## Speed calibration
+At startup the device asks the user to tap **PARIS** (`.--. .- .-. .. ...`), the standard Morse timing word.
+Because the pattern is known, each press is matched to its expected dot or dash. That gives the user's exact
+dot, dash and pause lengths before decoding starts.
+- If dots and dashes overlap (a mistyped calibration), it asks again.
+- **C** skips the calibration and keeps the default timing. Holding **B** recalibrates, and a short **B** during calibration restarts it.
+- After calibration, the decoder keeps adapting while the user types.
+
 ## Tuning
 The timing constants are at the top of `python/morse.py` (initial speed, adapt rate, letter/word gap factors).
 

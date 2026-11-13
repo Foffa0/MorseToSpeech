@@ -36,7 +36,26 @@ def on_word(word):
     speaker.say(word)  # speak each finished word immediately
 
 
-decoder = MorseDecoder(on_symbol=lambda s: show(), on_letter=lambda c: show(), on_word=on_word)
+def on_calibration(ok):
+    if ok:
+        print(f"[cal] done: dot~{decoder.dot_avg:.0f} dash~{decoder.dash_avg:.0f} "
+              f"letter-gap>{decoder.letter_gap_threshold:.0f} word-gap>{decoder.word_gap_threshold:.0f}",
+              flush=True)
+        speaker.say("Thank you. I'm ready.")
+    else:
+        print("[cal] dots and dashes overlapped, please tap PARIS again", flush=True)
+        speaker.say("Let's try that again. Please tap Paris.")
+
+
+decoder = MorseDecoder(on_symbol=lambda s: show(), on_letter=lambda c: show(), on_word=on_word,
+                       on_calibration=on_calibration)
+
+
+def start_calibration():
+    with lock:
+        decoder.start_calibration()
+    print("[cal] tap PARIS:  .--. .- .-. .. ...   (press C to skip)", flush=True)
+    speaker.say("Please tap Paris in Morse code, so I can learn your speed.")
 
 
 # --- events from the STM32 sketch -------------------------------------------
@@ -47,7 +66,13 @@ def key_down():
 
 def key_up(duration_ms):
     with lock:
+        was_calibrating = decoder.calibrating
         decoder.key_up(duration_ms, now_ms())
+        if was_calibrating:
+            done, needed = decoder.calibration_progress
+            if decoder.calibrating:
+                print(f"[cal] {int(duration_ms)} ms  ({done}/{needed})", flush=True)
+            return
         print(f"[key] {int(duration_ms)} ms  dot~{decoder.dot_avg:.0f} dash~{decoder.dash_avg:.0f}"
               f"  letter-gap>{decoder.letter_gap_threshold:.0f} word-gap>{decoder.word_gap_threshold:.0f}",
               flush=True)
@@ -55,13 +80,26 @@ def key_up(duration_ms):
 
 def backspace():
     with lock:
-        decoder.backspace()
-        show()
+        calibrating = decoder.calibrating
+        if not calibrating:
+            decoder.backspace()
+            show()
+    if calibrating:          # mistake during calibration -> start over
+        start_calibration()
 
 
 def speak():
     with lock:
-        sentence = decoder.take_sentence()
+        if decoder.calibrating:  # C skips calibration, default timing is used
+            decoder.cancel_calibration()
+            skipped = True
+        else:
+            skipped = False
+            sentence = decoder.take_sentence()
+    if skipped:
+        print("[cal] skipped, using default timing", flush=True)
+        speaker.say("Okay, skipped.")
+        return
     print(f"[sentence] {sentence}", flush=True)
     speaker.say(sentence)
 
@@ -77,6 +115,7 @@ Bridge.provide("key_down", key_down)
 Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
 Bridge.provide("speak", speak)
+Bridge.provide("calibrate", start_calibration)
 # --- Wake word (Nicla Voice over USB, see wake.py) ---------------------------
 def on_wake(label):
     """Called once per detected wake word (from the Nicla Voice, see wake.py)."""
@@ -93,6 +132,7 @@ def loop():
     time.sleep(0.02)
 
 
-print("MorseToSpeech ready. Button A = Morse key, B = backspace, C = speak sentence, "
-      "hold C = listen (speech -> Morse).", flush=True)
+print("MorseToSpeech ready. A = Morse key, B = backspace (hold: recalibrate), "
+      "C = speak sentence (hold: listen, speech -> Morse).", flush=True)
+start_calibration()
 App.run(user_loop=loop)

@@ -22,6 +22,7 @@ INTRA_GAP_FACTOR = 2.0      # letter ends if silence > factor * learned gap insi
 LETTER_TO_WORD_FACTOR = 2.0 # word ends if silence > factor * learned gap between letters
 MIN_WORD_GAP_MS = 1200.0    # never end a word faster than this
 MAX_LETTER_GAP_MS = 4000.0  # ignore extreme pauses when learning
+CALIBRATION_WORD = "PARIS"  # standard Morse timing word: .--. .- .-. .. ...
 
 MORSE_TABLE = {
     ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F",
@@ -76,13 +77,20 @@ class MorseDecoder:
         on_symbol(symbol)  -- current dot/dash pattern changed, e.g. ".-"
         on_letter(char)    -- a letter was finished
         on_word(word)      -- a word was finished (silence long enough)
+        on_calibration(ok) -- calibration finished (True) or failed and restarted (False)
     """
 
-    def __init__(self, on_symbol=None, on_letter=None, on_word=None,
+    def __init__(self, on_symbol=None, on_letter=None, on_word=None, on_calibration=None,
                  dot_ms=INITIAL_DOT_MS, dash_ms=INITIAL_DASH_MS):
         self.on_symbol = on_symbol or _noop
         self.on_letter = on_letter or _noop
         self.on_word = on_word or _noop
+        self.on_calibration = on_calibration or _noop
+        self.calibrating = False
+        self._cal_expected = []   # expected '.'/'-' per press
+        self._cal_gap_kinds = []  # 'intra' or 'letter' for the pause before each press (from 2nd)
+        self._cal_presses = []
+        self._cal_gaps = []
         self.dot_avg = float(dot_ms)
         self.dash_avg = float(dash_ms)
         self.symbol = ""          # dots/dashes of the letter being typed
@@ -94,9 +102,69 @@ class MorseDecoder:
         self.intra_gap_avg = float(dot_ms)       # pause between dots/dashes of a letter
         self.letter_gap_avg = 3.0 * float(dot_ms)  # pause between letters of a word
 
+    # --- calibration ----------------------------------------------------------
+    def start_calibration(self, word=CALIBRATION_WORD):
+        """User taps a known word. Since we know which press is a dot or dash and which
+        pause is inside/between letters, we can measure the user's timing exactly."""
+        self.calibrating = True
+        self._cal_expected, self._cal_gap_kinds = [], []
+        for letter_i, ch in enumerate(word.upper()):
+            for sym_i, sym in enumerate(CHAR_TO_MORSE[ch]):
+                if self._cal_expected:
+                    self._cal_gap_kinds.append("intra" if sym_i else "letter")
+                self._cal_expected.append(sym)
+        self._cal_presses, self._cal_gaps = [], []
+        self.symbol, self.word, self.words, self._word_open = "", "", [], False
+        self._last_release = None
+
+    def cancel_calibration(self):
+        self.calibrating = False
+        self._last_release = None
+
+    @property
+    def calibration_progress(self):
+        """(presses done, presses needed)"""
+        return len(self._cal_presses), len(self._cal_expected)
+
+    def _calibration_key_down(self, now_ms):
+        if self._cal_presses and now_ms is not None and self._last_release is not None:
+            self._cal_gaps.append(now_ms - self._last_release)
+
+    def _calibration_key_up(self, duration_ms, now_ms):
+        self._last_release = now_ms
+        self._cal_presses.append(float(duration_ms))
+        if len(self._cal_presses) < len(self._cal_expected):
+            return
+
+        pairs = list(zip(self._cal_presses, self._cal_expected))
+        dots = [d for d, e in pairs if e == "."]
+        dashes = [d for d, e in pairs if e == "-"]
+        intra = [g for g, k in zip(self._cal_gaps, self._cal_gap_kinds) if k == "intra"]
+        letter = [g for g, k in zip(self._cal_gaps, self._cal_gap_kinds) if k == "letter"]
+
+        if max(dots) >= min(dashes):           # dots and dashes overlap -> mistyped
+            self.start_calibration()            # try again
+            self.on_calibration(False)
+            return
+
+        self.dot_avg = sum(dots) / len(dots)
+        self.dash_avg = sum(dashes) / len(dashes)
+        self._clamp()
+        if intra:
+            self.intra_gap_avg = sum(intra) / len(intra)
+        if letter:
+            self.letter_gap_avg = min(sum(letter) / len(letter), MAX_LETTER_GAP_MS)
+        self.letter_gap_avg = max(self.letter_gap_avg, self.intra_gap_avg * 1.5)
+        self.calibrating = False
+        self._last_release = None
+        self.on_calibration(True)
+
     # --- input events -------------------------------------------------------
     def key_down(self, now_ms=None):
         self._key_down = True
+        if self.calibrating:
+            self._calibration_key_down(now_ms)
+            return
         if now_ms is None or self._last_release is None:
             return
         gap = now_ms - self._last_release
@@ -109,6 +177,9 @@ class MorseDecoder:
     def key_up(self, duration_ms, now_ms):
         """Key released after being held `duration_ms`. `now_ms` = release time."""
         self._key_down = False
+        if self.calibrating:
+            self._calibration_key_up(duration_ms, now_ms)
+            return
         self._last_release = now_ms
         duration_ms = float(duration_ms)
 
@@ -123,7 +194,7 @@ class MorseDecoder:
 
     def tick(self, now_ms):
         """Call regularly. Finishes letters/words when the silence is long enough."""
-        if self._key_down or self._last_release is None:
+        if self.calibrating or self._key_down or self._last_release is None:
             return
         gap = now_ms - self._last_release
         if self.symbol and gap > self.letter_gap_threshold:
@@ -156,7 +227,11 @@ class MorseDecoder:
 
     @property
     def letter_gap_threshold(self):
-        return max(LETTER_GAP_FACTOR * self.dot_avg, INTRA_GAP_FACTOR * self.intra_gap_avg)
+        # Never above the midpoint between pauses inside and between letters, otherwise
+        # a user with short letter pauses (seen in calibration) would get merged letters.
+        learned = min(INTRA_GAP_FACTOR * self.intra_gap_avg,
+                      (self.intra_gap_avg + self.letter_gap_avg) / 2.0)
+        return max(LETTER_GAP_FACTOR * self.dot_avg, learned)
 
     @property
     def word_gap_threshold(self):

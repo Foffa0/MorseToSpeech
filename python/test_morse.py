@@ -9,7 +9,8 @@ class Sim:
     def __init__(self):
         self.t = 0.0
         self.words = []
-        self.dec = MorseDecoder(on_word=self.words.append)
+        self.calibrations = []
+        self.dec = MorseDecoder(on_word=self.words.append, on_calibration=self.calibrations.append)
 
     def wait(self, ms):
         end = self.t + ms
@@ -141,3 +142,57 @@ def test_roundtrip_encode_then_decode():
             sim.wait(ms)
     sim.wait(4000)
     assert sim.dec.take_sentence() == "I NEED HELP"
+
+
+# --- speed calibration --------------------------------------------------------
+def test_calibration_fast_user():
+    """Without calibration a sudden 70 ms dot is misread (dashes < initial threshold)."""
+    sim = Sim()
+    sim.dec.start_calibration()
+    sim.tap_text("PARIS", unit=70)
+    assert sim.calibrations == [True]
+    assert not sim.dec.calibrating
+    assert sim.words == []                     # calibration word is not spoken
+    assert 60 < sim.dec.dot_avg < 80 and 190 < sim.dec.dash_avg < 230
+    sim.tap_text("I NEED WATER", unit=70)
+    assert sim.words == ["I", "NEED", "WATER"]
+
+
+def test_calibration_slow_user_with_long_pauses():
+    sim = Sim()
+    sim.dec.start_calibration()
+    sim.tap_text("PARIS", unit=300, letter_gap=1500)
+    assert sim.calibrations == [True]
+    sim.tap_text("HELP ME", unit=300, letter_gap=1500, word_gap=4000)
+    assert sim.words == ["HELP", "ME"]
+
+
+def test_calibration_learns_sloppy_dash_ratio():
+    sim = Sim()
+    sim.dec.start_calibration()
+    sim.tap_text("PARIS", unit=120, dash_ratio=2.0)
+    assert sim.calibrations == [True]
+    sim.tap_text("YES", unit=120, dash_ratio=2.0)
+    assert sim.words == ["YES"]
+
+
+def test_calibration_retries_on_mistake():
+    sim = Sim()
+    sim.dec.start_calibration()
+    for _ in range(14):                       # only dots -> can't tell dot from dash
+        sim.press(100)
+        sim.wait(100)
+    assert sim.calibrations == [False]
+    assert sim.dec.calibrating                 # restarted, waiting for PARIS again
+    assert sim.dec.calibration_progress == (0, 14)
+    sim.tap_text("PARIS", unit=100)
+    assert sim.calibrations == [False, True]
+
+
+def test_calibration_can_be_skipped():
+    sim = Sim()
+    sim.dec.start_calibration()
+    sim.press(150)
+    sim.dec.cancel_calibration()
+    sim.tap_text("SOS", unit=150)
+    assert sim.words == ["SOS"]
