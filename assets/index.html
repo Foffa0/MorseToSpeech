@@ -7,14 +7,16 @@
 <style>
   :root {
     --bg: #f4f5f7; --card: #ffffff; --text: #16181d; --muted: #5d6470;
-    --line: #dde1e7; --accent: #1f6feb; --accent-text: #ffffff;
-    --warn-bg: #fff4d6; --warn-text: #7a5300; --ok: #1a7f37;
+    --line: #dde1e7; --accent: #1f6feb; --accent-text: #ffffff; --accent-soft: #e6efff;
+    --partner-soft: #eef0f3; --dim: #c3c8d0;
+    --warn-bg: #fff4d6; --warn-text: #7a5300; --ok: #1a7f37; --live: #d1242f;
   }
   @media (prefers-color-scheme: dark) {
     :root {
       --bg: #0f1115; --card: #181b21; --text: #e8eaee; --muted: #9aa2ad;
-      --line: #2a2f38; --accent: #4c8dff; --accent-text: #0b0d10;
-      --warn-bg: #3a2f12; --warn-text: #ffd479; --ok: #4ac26b;
+      --line: #2a2f38; --accent: #4c8dff; --accent-text: #0b0d10; --accent-soft: #1b2a45;
+      --partner-soft: #22262e; --dim: #444b57;
+      --warn-bg: #3a2f12; --warn-text: #ffd479; --ok: #4ac26b; --live: #ff6b6b;
     }
   }
   * { box-sizing: border-box; }
@@ -23,125 +25,398 @@
     font: 18px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     -webkit-tap-highlight-color: transparent;
   }
-  main { max-width: 720px; margin: 0 auto; padding: 24px 16px 40px; }
-  h1 { font-size: 28px; margin: 0 0 4px; letter-spacing: -0.01em; }
-  .sub { color: var(--muted); margin: 0 0 24px; }
-  .card {
-    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
-    padding: 20px; margin-bottom: 12px;
-  }
-  .label { font-size: 14px; font-weight: 600; color: var(--muted);
-           text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 4px; }
-  .hint { color: var(--muted); font-size: 15px; margin: 0 0 14px; }
-  .options { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; }
-  .lang {
-    min-height: 64px; border-radius: 12px; border: 2px solid var(--line);
-    background: transparent; color: var(--text); font: inherit; font-weight: 600; cursor: pointer;
-  }
-  .lang[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-  .lang:focus-visible, .swap:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
-  .swap-row { display: flex; justify-content: center; margin: -2px 0 10px; }
-  .swap {
-    min-height: 48px; padding: 0 20px; border-radius: 999px; border: 1px solid var(--line);
-    background: var(--card); color: var(--text); font: inherit; font-size: 16px; cursor: pointer;
-  }
-  .flow { list-style: none; padding: 0; margin: 0; }
-  .flow li { padding: 10px 0; border-top: 1px solid var(--line); }
-  .flow li:first-child { border-top: 0; padding-top: 0; }
-  .flow b { font-weight: 600; }
-  .tag { display: inline-block; font-size: 13px; font-weight: 600; padding: 2px 8px;
-         border-radius: 999px; border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+  main { max-width: 900px; margin: 0 auto; padding: 20px 16px 40px; }
+  header { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; margin-bottom: 16px; }
+  h1 { font-size: 26px; margin: 0; letter-spacing: -0.01em; flex: 1 1 auto; }
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .chip { font-size: 14px; font-weight: 600; padding: 4px 10px; border-radius: 999px;
+          border: 1px solid var(--line); background: var(--card); color: var(--muted); white-space: nowrap; }
+  .chip.live { color: var(--live); border-color: var(--live); }
+  .chip.live::before { content: "●"; margin-right: 6px; animation: pulse 1s infinite; }
+  @keyframes pulse { 50% { opacity: 0.25; } }
+  [hidden] { display: none !important; }
+
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+          padding: 18px 20px; margin-bottom: 12px; }
+  .label { font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+           letter-spacing: 0.06em; margin: 0 0 8px; }
+
+  /* --- now typing --- */
+  .typing { font: 600 30px/1.3 ui-monospace, "SF Mono", Consolas, monospace; min-height: 40px;
+            word-break: break-word; }
+  .typing .caret { display: inline-block; width: 3px; height: 1em; background: var(--accent);
+                   vertical-align: -0.12em; margin-left: 2px; animation: pulse 1s infinite; }
+  .typing .placeholder { color: var(--muted); font-weight: 400; font-size: 20px; font-family: inherit; }
+  .symbol-row { display: flex; align-items: center; gap: 14px; margin-top: 10px; min-height: 36px; }
+  .key { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--line); flex: none;
+         transition: background 60ms, border-color 60ms; }
+  .key.down { background: var(--accent); border-color: var(--accent); }
+  .symbol { font: 700 30px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.15em; color: var(--accent); }
+  .cal { margin-top: 10px; font-size: 16px; color: var(--muted); }
+  .cal b { color: var(--text); font-family: ui-monospace, Consolas, monospace; }
+
+  /* --- conversation --- */
+  .log { display: flex; flex-direction: column; gap: 10px; max-height: 55vh; overflow-y: auto;
+         padding-right: 4px; scroll-behavior: smooth; }
+  .empty { color: var(--muted); text-align: center; padding: 18px 0; }
+  .msg { max-width: 85%; border-radius: 14px; padding: 12px 14px; }
+  .msg.you { align-self: flex-end; background: var(--accent-soft); border-bottom-right-radius: 4px; }
+  .msg.partner { align-self: flex-start; background: var(--partner-soft); border-bottom-left-radius: 4px; }
+  .msg.info { align-self: center; max-width: 100%; padding: 2px 8px; color: var(--muted); font-size: 14px; }
+  .who { font-size: 13px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+  .main-text { font-size: 20px; font-weight: 600; }
+  .sub-text { font-size: 16px; color: var(--muted); margin-top: 2px; }
+  .morse { display: flex; flex-wrap: wrap; gap: 8px 0; margin-top: 10px; }
+  .mword { display: flex; flex-wrap: wrap; gap: 6px 8px; margin-right: 20px; }
+  .mletter { display: flex; flex-direction: column; align-items: center; }
+  .msyms { font: 700 18px/1 ui-monospace, Consolas, monospace; letter-spacing: 0.08em; }
+  .mchar { font-size: 12px; color: var(--muted); margin-top: 3px; }
+  .sym { transition: color 80ms; }
+  .animating .sym { color: var(--dim); }
+  .animating .sym.on { color: var(--accent); }
+
+  /* --- device stats --- */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; }
+  .tile { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 0; }
+  .tile .name { font-size: 13px; font-weight: 600; color: var(--muted); }
+  .tile .value { font-size: 26px; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .value small { font-size: 15px; font-weight: 600; color: var(--muted); }
+  .tile .detail { font-size: 14px; color: var(--muted); margin-top: 2px; font-variant-numeric: tabular-nums;
+                  min-height: 20px; }
+  .spark { display: block; width: 100%; height: 40px; margin-top: 8px; touch-action: none; cursor: crosshair; }
+  .spark .base { stroke: var(--line); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .spark .line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round;
+                 stroke-linecap: round; vector-effect: non-scaling-stroke; }
+  .spark .area { fill: var(--accent); opacity: 0.12; }
+  .spark .hover-x { stroke: var(--muted); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .note { font-size: 13px; color: var(--muted); margin: 10px 0 0; }
+
+  /* --- languages (prominent, at the top) --- */
+  .langs { border: 2px solid var(--accent); padding: 20px; }
+  .lang-grid { display: grid; grid-template-columns: 1fr auto 1fr; gap: 14px; align-items: end; }
+  .side-title { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+  .side-title span { display: block; font-size: 14px; font-weight: 500; color: var(--muted); }
+  .segmented { display: flex; gap: 6px; padding: 5px; border-radius: 14px; background: var(--bg);
+               border: 1px solid var(--line); }
+  .lang { flex: 1; min-height: 60px; border-radius: 10px; border: 0; background: transparent; color: var(--text);
+          font: inherit; font-size: 20px; font-weight: 700; cursor: pointer; }
+  .lang:hover { background: var(--line); }
+  .lang[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); }
+  .swap { width: 56px; height: 56px; margin-bottom: 7px; border-radius: 50%; border: 1px solid var(--line);
+          background: var(--card); color: var(--text); font: inherit; font-size: 24px; cursor: pointer; }
+  .swap:hover { border-color: var(--accent); color: var(--accent); }
+  button:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .flow { list-style: none; padding: 0; margin: 16px 0 0; display: flex; flex-wrap: wrap; gap: 6px 24px;
+          font-size: 16px; }
+  .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+         border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
   .tag.on { color: var(--ok); border-color: var(--ok); }
-  .warnings { list-style: none; padding: 0; margin: 12px 0 0; }
+  .warnings { list-style: none; padding: 0; margin: 4px 0 0; }
   .warnings li { background: var(--warn-bg); color: var(--warn-text); border-radius: 10px;
-                 padding: 10px 12px; margin-top: 8px; font-size: 15px; }
-  .status { min-height: 24px; color: var(--muted); font-size: 15px; text-align: center; margin-top: 8px; }
-  .status.error { color: #d1242f; }
+                 padding: 8px 12px; margin-top: 8px; font-size: 15px; }
+  .status { color: var(--muted); font-size: 15px; margin: 8px 0 0; }
+  .status:empty, .warnings:empty { display: none; }
+  .status.error { color: var(--live); }
+  @media (max-width: 600px) {
+    .lang-grid { grid-template-columns: 1fr; }
+    .swap { justify-self: center; margin: 0; transform: rotate(90deg); }
+  }
+
+  /* --- device statistics (bottom, low-key) --- */
+  .device { background: transparent; }
+  .device .tile { background: var(--card); }
+  .offline { background: var(--warn-bg); color: var(--warn-text); border-radius: 12px; padding: 10px 14px;
+             margin-bottom: 12px; }
 </style>
 </head>
 <body>
 <main>
-  <h1>MorseToSpeech</h1>
-  <p class="sub">Choose who speaks which language. Everything is translated offline on the device.</p>
+  <header>
+    <h1>MorseToSpeech</h1>
+    <div class="chips" aria-live="polite">
+      <span class="chip live" id="chip-listening" hidden>Listening…</span>
+      <span class="chip" id="chip-speed" title="Morse output speed (Modulino Knob)"></span>
+    </div>
+  </header>
 
-  <section class="card" aria-labelledby="user-label">
-    <p class="label" id="user-label">You (Morse)</p>
-    <p class="hint">The language you tap and receive Morse in.</p>
-    <div class="options" id="user-options" role="group" aria-labelledby="user-label"></div>
-  </section>
+  <div class="offline" id="offline" role="alert" hidden>Can't reach the device. Is the app running?</div>
 
-  <div class="swap-row">
-    <button class="swap" id="swap" type="button" aria-label="Swap languages">⇅ Swap</button>
-  </div>
-
-  <section class="card" aria-labelledby="partner-label">
-    <p class="label" id="partner-label">Conversation partner (speech)</p>
-    <p class="hint">The language your partner speaks and hears.</p>
-    <div class="options" id="partner-options" role="group" aria-labelledby="partner-label"></div>
-  </section>
-
-  <section class="card" aria-labelledby="flow-label">
-    <p class="label" id="flow-label">What happens</p>
+  <section class="card langs" aria-labelledby="langs-label">
+    <p class="label" id="langs-label">Languages</p>
+    <div class="lang-grid">
+      <div>
+        <div class="side-title" id="user-label">You <span>tap &amp; feel Morse</span></div>
+        <div class="segmented" id="user-options" role="group" aria-labelledby="user-label"></div>
+      </div>
+      <button class="swap" id="swap" type="button" aria-label="Swap languages" title="Swap languages">⇄</button>
+      <div>
+        <div class="side-title" id="partner-label">Partner <span>speaks &amp; listens</span></div>
+        <div class="segmented" id="partner-options" role="group" aria-labelledby="partner-label"></div>
+      </div>
+    </div>
     <ul class="flow" id="flow"></ul>
     <ul class="warnings" id="warnings"></ul>
+    <p class="status" id="status" role="status" aria-live="polite"></p>
   </section>
 
-  <p class="status" id="status" role="status" aria-live="polite"></p>
+  <section class="card" aria-labelledby="typing-label">
+    <p class="label" id="typing-label">Now typing</p>
+    <div class="typing" id="typing"></div>
+    <div class="symbol-row">
+      <span class="key" id="key" aria-hidden="true"></span>
+      <span class="symbol" id="symbol" aria-label="Current letter in Morse"></span>
+    </div>
+    <div class="cal" id="cal" hidden></div>
+  </section>
+
+  <section class="card" aria-labelledby="log-label">
+    <p class="label" id="log-label">Conversation</p>
+    <div class="log" id="log" aria-live="polite">
+      <div class="empty" id="empty">Nothing yet. Tap Morse and press C, or hold C to listen.</div>
+    </div>
+  </section>
+
+
+  <section class="card device" aria-labelledby="device-label">
+    <p class="label" id="device-label">Device statistics</p>
+    <div class="tiles">
+      <div class="tile">
+        <div class="name">CPU</div>
+        <div class="value" id="cpu-value">–</div>
+        <div class="detail" id="cpu-detail"></div>
+        <svg class="spark" id="cpu-spark" viewBox="0 0 120 40" preserveAspectRatio="none"
+             role="img" aria-label="CPU load, last 2 minutes"></svg>
+      </div>
+      <div class="tile">
+        <div class="name">Memory</div>
+        <div class="value" id="ram-value">–</div>
+        <div class="detail" id="ram-detail"></div>
+        <svg class="spark" id="ram-spark" viewBox="0 0 120 40" preserveAspectRatio="none"
+             role="img" aria-label="Memory use, last 2 minutes"></svg>
+      </div>
+      <div class="tile">
+        <div class="name">Power</div>
+        <div class="value" id="power-value">–</div>
+        <div class="detail" id="power-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">This app</div>
+        <div class="value" id="app-value">–</div>
+        <div class="detail" id="app-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">Temperature</div>
+        <div class="value" id="temp-value">–</div>
+        <div class="detail" id="temp-detail"></div>
+      </div>
+      <div class="tile">
+        <div class="name">Translation</div>
+        <div class="value" id="tr-value">–</div>
+        <div class="detail" id="tr-detail"></div>
+      </div>
+    </div>
+    <p class="note" id="stats-note"></p>
+  </section>
 </main>
 
 <script>
-  const API = "/api/languages";
-  let state = null;
-  let busy = false;
+  // ---------------------------------------------------------------- Morse helpers
+  const MORSE = {
+    ".-": "A", "-...": "B", "-.-.": "C", "-..": "D", ".": "E", "..-.": "F", "--.": "G", "....": "H",
+    "..": "I", ".---": "J", "-.-": "K", ".-..": "L", "--": "M", "-.": "N", "---": "O", ".--.": "P",
+    "--.-": "Q", ".-.": "R", "...": "S", "-": "T", "..-": "U", "...-": "V", ".--": "W", "-..-": "X",
+    "-.--": "Y", "--..": "Z", "-----": "0", ".----": "1", "..---": "2", "...--": "3", "....-": "4",
+    ".....": "5", "-....": "6", "--...": "7", "---..": "8", "----.": "9",
+    ".-.-.-": ".", "--..--": ",", "..--..": "?", "-..-.": "/",
+  };
+  const pretty = (s) => s.replace(/\./g, "·").replace(/-/g, "−");
 
-  const nameOf = (code) => (state.languages.find((l) => l.code === code) || {}).name || code;
+  // Renders "... --- ... / .-" as letter blocks. Returns the element and, for animation,
+  // the start time of every symbol in dot units (dot 1, dash 3, gaps 1 / 3 / 7).
+  function renderMorse(code) {
+    const box = document.createElement("div");
+    box.className = "morse";
+    const schedule = [];
+    let t = 0;
+    code.split(" / ").forEach((word, wi) => {
+      if (wi) t += 7;
+      const w = document.createElement("div");
+      w.className = "mword";
+      word.split(" ").forEach((letter, li) => {
+        if (li) t += 3;
+        const l = document.createElement("div");
+        l.className = "mletter";
+        const syms = document.createElement("div");
+        syms.className = "msyms";
+        [...letter].forEach((s, si) => {
+          if (si) t += 1;
+          const span = document.createElement("span");
+          span.className = "sym";
+          span.textContent = pretty(s);
+          syms.appendChild(span);
+          schedule.push([t, span]);
+          t += s === "." ? 1 : 3;
+        });
+        const ch = document.createElement("div");
+        ch.className = "mchar";
+        ch.textContent = MORSE[letter] || "?";
+        l.append(syms, ch);
+        w.appendChild(l);
+      });
+      box.appendChild(w);
+    });
+    return { box, schedule, total: t };
+  }
 
+  // Light up the symbols in time with the playback on the device.
+  function animate(box, schedule, total, wpm) {
+    const unit = 1200 / (wpm || 15);
+    const start = performance.now();
+    box.classList.add("animating");
+    let i = 0;
+    function frame(now) {
+      const units = (now - start) / unit;
+      while (i < schedule.length && schedule[i][0] <= units) schedule[i++][1].classList.add("on");
+      if (units < total) requestAnimationFrame(frame);
+      else box.classList.remove("animating");
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---------------------------------------------------------------- live view
+  let lastId = 0;
+  let firstLoad = true;
+  let langState = null;
+  const el = (id) => document.getElementById(id);
+  const langName = (code) =>
+    ((langState && langState.languages.find((l) => l.code === code)) || {}).name || code;
+
+  function renderCurrent(c) {
+    const typing = el("typing");
+    typing.textContent = "";
+    if (c.typing) {
+      typing.append(c.typing);
+    } else if (!c.symbol) {
+      const p = document.createElement("span");
+      p.className = "placeholder";
+      p.textContent = c.calibrating ? "Calibrating…" : "Tap Morse on button A";
+      typing.appendChild(p);
+    }
+    const caret = document.createElement("span");
+    caret.className = "caret";
+    typing.appendChild(caret);
+
+    el("symbol").textContent = pretty(c.symbol || "");
+    el("key").classList.toggle("down", !!c.key_down);
+    el("chip-listening").hidden = !c.listening;
+    el("chip-speed").textContent = `${c.wpm} wpm`;
+
+    const cal = el("cal");
+    cal.hidden = !c.calibrating;
+    if (c.calibrating) {
+      cal.innerHTML = `Calibration: tap <b>PARIS</b> (${pretty(".--. .- .-. .. ...")}) — ` +
+        `${c.calibration[0]} / ${c.calibration[1]} presses · C to skip`;
+    }
+  }
+
+  function addEntry(e, live) {
+    el("empty").hidden = true;
+    const log = el("log");
+    const msg = document.createElement("div");
+    msg.className = `msg ${e.kind}`;
+
+    if (e.kind === "info") {
+      msg.textContent = e.text;
+      log.appendChild(msg);
+      return;
+    }
+    const who = document.createElement("div");
+    who.className = "who";
+    const main = document.createElement("div");
+    main.className = "main-text";
+    const sub = document.createElement("div");
+    sub.className = "sub-text";
+
+    if (e.kind === "you") {
+      who.textContent = "You";
+      main.textContent = e.text;
+      if (e.spoken) sub.textContent = `Spoken in ${langName(e.spoken_lang)}: “${e.spoken}”`;
+    } else {
+      who.textContent = "Partner";
+      main.textContent = e.text;
+      if (e.heard && e.heard.toLowerCase() !== e.text.toLowerCase().replace(/[.?!]$/, ""))
+        sub.textContent = `Said in ${langName(e.lang)}: “${e.heard}”`;
+    }
+    msg.append(who, main);
+    if (sub.textContent) msg.appendChild(sub);
+    if (e.code) {
+      const m = renderMorse(e.code);
+      msg.appendChild(m.box);
+      // the partner's message is played as Morse right now -> follow along
+      if (live && e.kind === "partner") animate(m.box, m.schedule, m.total, e.wpm);
+    }
+    log.appendChild(msg);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch(`/api/live?since=${lastId}`, { cache: "no-store" });
+      if (!r.ok) throw new Error(r.status);
+      const data = await r.json();
+      el("offline").hidden = true;
+      renderCurrent(data.current);
+      for (const e of data.entries) addEntry(e, !firstLoad);
+      lastId = data.last_id;
+      firstLoad = false;
+    } catch (err) {
+      el("offline").hidden = false;
+    }
+    setTimeout(poll, 200);
+  }
+
+  // ---------------------------------------------------------------- languages
   function renderOptions(containerId, role) {
-    const box = document.getElementById(containerId);
+    const box = el(containerId);
     box.textContent = "";
-    for (const lang of state.languages) {
+    for (const lang of langState.languages) {
       const b = document.createElement("button");
       b.type = "button";
       b.className = "lang";
       b.textContent = lang.name;
-      b.setAttribute("aria-pressed", String(state[role] === lang.code));
+      b.setAttribute("aria-pressed", String(langState[role] === lang.code));
       b.addEventListener("click", () => {
-        if (state[role] === lang.code) return;
-        const next = { user: state.user, partner: state.partner };
+        if (langState[role] === lang.code) return;
+        const next = { user: langState.user, partner: langState.partner };
         next[role] = lang.code;
-        save(next.user, next.partner);
+        saveLangs(next.user, next.partner);
       });
       box.appendChild(b);
     }
   }
 
-  function render() {
+  function renderLangs() {
+    const s = langState;
     renderOptions("user-options", "user");
     renderOptions("partner-options", "partner");
 
-    const same = state.user === state.partner;
-    const flow = document.getElementById("flow");
-    flow.innerHTML = "";
-    const items = [
-      [`You tap <b>${nameOf(state.user)}</b> → partner hears <b>${nameOf(state.translating_out ? state.partner : state.user)}</b>`,
-       same ? "same language" : state.translating_out ? "translated" : "not translated", state.translating_out],
-      [`Partner speaks <b>${nameOf(state.partner)}</b> → you get Morse in <b>${nameOf(state.translating_in ? state.user : state.partner)}</b>`,
-       same ? "same language" : state.translating_in ? "translated" : "not translated", state.translating_in],
+    const same = s.user === s.partner;
+    const flow = el("flow");
+    flow.textContent = "";
+    const rows = [
+      [`You tap <b>${langName(s.user)}</b> → partner hears <b>${langName(s.translating_out ? s.partner : s.user)}</b>`,
+       same ? "same language" : s.translating_out ? "translated" : "not translated", s.translating_out],
+      [`Partner speaks <b>${langName(s.partner)}</b> → you feel Morse in <b>${langName(s.translating_in ? s.user : s.partner)}</b>`,
+       same ? "same language" : s.translating_in ? "translated" : "not translated", s.translating_in],
     ];
-    for (const [html, tag, on] of items) {
+    for (const [html, tag, on] of rows) {
       const li = document.createElement("li");
       li.innerHTML = `${html}<span class="tag${on ? " on" : ""}">${tag}</span>`;
       flow.appendChild(li);
     }
-    if (state.translating_out) {
-      const li = document.createElement("li");
-      li.textContent = "Press C to speak the whole sentence (translation needs complete sentences).";
-      flow.appendChild(li);
-    }
-
-    const warn = document.getElementById("warnings");
+    const warn = el("warnings");
     warn.textContent = "";
-    for (const w of state.warnings) {
+    for (const w of s.warnings) {
       const li = document.createElement("li");
       li.textContent = w;
       warn.appendChild(li);
@@ -149,46 +424,138 @@
   }
 
   function setStatus(text, isError) {
-    const s = document.getElementById("status");
-    s.textContent = text;
-    s.classList.toggle("error", !!isError);
+    el("status").textContent = text;
+    el("status").classList.toggle("error", !!isError);
   }
 
-  async function load() {
+  async function loadLangs() {
     try {
-      const r = await fetch(API, { cache: "no-store" });
+      const r = await fetch("/api/languages", { cache: "no-store" });
       if (!r.ok) throw new Error(r.status);
-      state = await r.json();
-      render();
-      if (!busy) setStatus("");
-    } catch (e) {
-      setStatus("Can't reach the device. Is the app running?", true);
-    }
+      langState = await r.json();
+      renderLangs();
+    } catch (e) { /* the live poll shows the offline banner */ }
   }
 
-  async function save(user, partner) {
-    busy = true;
+  async function saveLangs(user, partner) {
     setStatus("Saving…");
     try {
       const q = new URLSearchParams({ user, partner });
-      const r = await fetch(`${API}?${q}`, { method: "POST" });
+      const r = await fetch(`/api/languages?${q}`, { method: "POST" });
       if (!r.ok) throw new Error((await r.json()).detail || r.status);
-      state = await r.json();
-      render();
+      langState = await r.json();
+      renderLangs();
       setStatus("Saved ✓");
     } catch (e) {
       setStatus(`Couldn't save: ${e.message}`, true);
-    } finally {
-      busy = false;
     }
   }
 
-  document.getElementById("swap").addEventListener("click", () => {
-    if (state) save(state.partner, state.user);
-  });
+  // ---------------------------------------------------------------- device stats
+  const fmtBytes = (b) => b == null ? "–" : b >= 1e9 ? `${(b / 1e9).toFixed(2)} GB` : `${Math.round(b / 1e6)} MB`;
+  const withUnit = (text) => text.replace(/ (\w+)$/, "<small> $1</small>");
+  const fmtDuration = (s) => s < 60 ? `${s} s` : s < 3600 ? `${Math.floor(s / 60)} min` :
+    `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min`;
+  const sparks = {};
 
-  load();
-  setInterval(load, 10000);   // pick up changes made from another screen
+  // Sparkline with a fixed 0–100 % scale (so a calm line really means low load).
+  // Hover / touch shows the value at that point in the tile's detail line.
+  function drawSpark(id, history, sampleS, detailId, label) {
+    const svg = el(id);
+    const W = 120, H = 40, pad = 3;
+    const n = history.length;
+    const hoverIndex = sparks[id] ? sparks[id].hoverIndex : null;
+    sparks[id] = { history, sampleS, detailId, label, hoverIndex };
+    if (n < 2) { svg.innerHTML = ""; return; }
+    const x = (i) => (i / (n - 1)) * W;
+    const y = (v) => H - pad - (Math.min(100, Math.max(0, v)) / 100) * (H - 2 * pad);
+    const pts = history.map((v, i) => `${x(i).toFixed(2)},${y(v).toFixed(2)}`).join(" ");
+    svg.innerHTML =
+      `<line class="base" x1="0" x2="${W}" y1="${H - pad}" y2="${H - pad}"/>` +
+      `<polygon class="area" points="0,${H - pad} ${pts} ${W},${H - pad}"/>` +
+      `<polyline class="line" points="${pts}"/>` +
+      `<line class="hover-x" id="${id}-hx" y1="0" y2="${H}" visibility="hidden"/>`;
+    if (hoverIndex != null) showHover(id, hoverIndex);
+  }
+
+  function showHover(id, i) {
+    const sp = sparks[id];
+    const n = sp.history.length;
+    i = Math.min(n - 1, Math.max(0, i));
+    sp.hoverIndex = i;
+    const hx = el(`${id}-hx`);
+    if (!hx) return;
+    const xPos = (i / (n - 1)) * 120;
+    hx.setAttribute("x1", xPos); hx.setAttribute("x2", xPos); hx.setAttribute("visibility", "visible");
+    const ago = Math.round((n - 1 - i) * sp.sampleS);
+    el(sp.detailId).textContent = `${sp.history[i]} % ${sp.label} · ${ago ? `${ago} s ago` : "now"}`;
+  }
+
+  for (const id of ["cpu-spark", "ram-spark"]) {
+    const svg = el(id);
+    svg.addEventListener("pointermove", (ev) => {
+      const sp = sparks[id];
+      if (!sp || sp.history.length < 2) return;
+      const r = svg.getBoundingClientRect();
+      showHover(id, Math.round(((ev.clientX - r.left) / r.width) * (sp.history.length - 1)));
+    });
+    svg.addEventListener("pointerleave", () => {
+      if (sparks[id]) sparks[id].hoverIndex = null;
+      if (lastStats) renderStats(lastStats);
+    });
+  }
+
+  let lastStats = null;
+  function renderStats(st) {
+    lastStats = st;
+    const cpu = st.cpu, ram = st.ram, app = st.app, pw = st.power;
+    el("cpu-value").innerHTML = cpu.percent == null ? "–" : `${Math.round(cpu.percent)}<small> %</small>`;
+    drawSpark("cpu-spark", cpu.history, st.sample_s, "cpu-detail", "CPU");
+    if (sparks["cpu-spark"].hoverIndex == null) el("cpu-detail").textContent = `${cpu.cores} cores · last 2 min`;
+
+    el("ram-value").innerHTML = ram.used == null ? "–" : withUnit(fmtBytes(ram.used));
+    drawSpark("ram-spark", ram.history, st.sample_s, "ram-detail", "used");
+    if (sparks["ram-spark"].hoverIndex == null)
+      el("ram-detail").textContent = ram.total ? `of ${fmtBytes(ram.total)} (${Math.round(ram.percent)} %)` : "";
+
+    if (pw.watts == null) {
+      el("power-value").textContent = "n/a";
+      el("power-detail").textContent = "No power sensor on this board";
+    } else {
+      el("power-value").innerHTML = `${pw.watts.toFixed(2)}<small> W</small>`;
+      el("power-detail").textContent = `${pw.source === "measured" ? "Measured" : "Estimated from CPU"} · ` +
+        `${(pw.energy_wh * 1000).toFixed(1)} mWh so far`;
+    }
+
+    el("app-value").innerHTML = app.ram == null ? "–" : withUnit(fmtBytes(app.ram));
+    el("app-detail").textContent = app.cpu_percent_avg == null ? "" :
+      `RAM · avg ${app.cpu_percent_avg} % CPU · ${app.cpu_seconds} CPU-s`;
+
+    el("temp-value").innerHTML = st.temperature == null ? "n/a" : `${st.temperature.toFixed(1)}<small> °C</small>`;
+    el("temp-detail").textContent = `Uptime ${fmtDuration(st.uptime_s)}`;
+
+    const tr = st.timings.translate;
+    el("tr-value").innerHTML = tr ? `${tr.avg_ms}<small> ms</small>` : "–";
+    el("tr-detail").textContent = tr ? `avg of ${tr.count} · last ${tr.last_ms} ms` : "No translations yet";
+
+    el("stats-note").textContent = pw.source === "unavailable"
+      ? "Power: set MORSE_IDLE_W and MORSE_FULL_W (measured with a USB-C power meter) to show an estimate."
+      : "";
+  }
+
+  async function pollStats() {
+    try {
+      const r = await fetch("/api/stats", { cache: "no-store" });
+      if (r.ok) renderStats(await r.json());
+    } catch (e) { /* the live poll shows the offline banner */ }
+    setTimeout(pollStats, 2000);
+  }
+  pollStats();
+
+  el("swap").addEventListener("click", () => langState && saveLangs(langState.partner, langState.user));
+
+  loadLangs().then(poll);
+  setInterval(loadLangs, 10000);
 </script>
 </body>
 </html>
