@@ -4,25 +4,29 @@
   Uses the standard Syntiant packages that are already stored on the Nicla's
   external flash (mcu_fw_120_v91, dsp_firmware_v91, alexa_334_NDP120_B0_v11_v91).
 
-  Serial protocol (USB, 115200 8N1, '\n' terminated) - consumed by python/wake.py:
-      WAKE <label>      one line per detected wake word, e.g. "WAKE Alexa"
-      # <text>          debug / status line (only logged by the backend)
-  Library error messages (printf from the NDP library) may also appear; they
-  never start with "WAKE".
+  Bluetooth LE (consumed by python/wake.py on the UNO Q) - ONLY the wake signal:
+      peripheral name   "NiclaWake"
+      service           4a8b0001-6c1d-4b7e-9f2a-3d5e7c9b1a20
+      characteristic    4a8b0002-6c1d-4b7e-9f2a-3d5e7c9b1a20  (read + notify)
+                        uint32 little-endian wake counter. It is incremented and
+                        notified once per detected "Alexa", so the receiver can
+                        tell notifications apart and count missed ones.
+  After a disconnect the board advertises again.
 
-  A heartbeat "# alive ..." is sent every 5 s (the backend warns after 10 s of
-  silence).
+  USB serial (115200 8N1) - debug only, for the Serial Monitor:
+      # <text>          status / debug lines, heartbeat "# alive ..." every 5 s
+  Library error messages (printf from the NDP library) may also appear.
 
   Single-character commands you can type in the Serial Monitor:
-      s  status        t  send a test "WAKE test" line
+      s  status        t  send a test wake over BLE
       r  reboot        h  help
 
   Robustness:
     * NDP callbacks run in the library's small "events" thread. They only bump
-      counters; all printing / LED work happens in loop().
+      counters; all printing / BLE / LED work happens in loop().
     * The NDP error callback never blocks (the stock example loops forever).
     * Hardware watchdog: if anything hangs or crashes, the board reboots.
-    * Init failure or an error storm -> error mode (red blink) -> auto reboot.
+    * Init failure (NDP or BLE) or an error storm -> error mode (red blink) -> auto reboot.
     * Hardware UART (via the on-board USB bridge, no flow control): writes never
       block waiting for a host, so an unplugged/closed port cannot stall the sketch.
 
@@ -31,6 +35,7 @@
 */
 
 #include "NDP.h"
+#include <ArduinoBLE.h>
 #include <stdarg.h>
 
 // ----------------------------------------------------------------------------
@@ -51,6 +56,10 @@ static const uint32_t ERROR_STORM_COUNT  = 20;       // > this many NDP errors p
 static const uint32_t LED_FLASH_MS       = 300;
 static const uint32_t LOOP_DELAY_MS      = 5;
 static const int      MAX_LABELS         = 32;       // NDPClass::MAX_LABELS
+
+static const char *BLE_NAME         = "NiclaWake";
+static const char *BLE_SERVICE_UUID = "4a8b0001-6c1d-4b7e-9f2a-3d5e7c9b1a20";
+static const char *BLE_WAKE_UUID    = "4a8b0002-6c1d-4b7e-9f2a-3d5e7c9b1a20";
 
 // ----------------------------------------------------------------------------
 // State shared with the NDP "events" thread (single writer there, read in loop)
@@ -89,6 +98,11 @@ static uint32_t errWindowStartMs = 0;
 static uint32_t errWindowCount   = 0;
 
 static const char *resetReason = "unknown";
+
+static BLEService                    bleService(BLE_SERVICE_UUID);
+static BLEUnsignedLongCharacteristic bleWakeChar(BLE_WAKE_UUID, BLERead | BLENotify);
+static bool bleReady     = false;
+static bool bleConnected = false;
 
 // ----------------------------------------------------------------------------
 // Helpers
@@ -178,19 +192,26 @@ static void printLabels() {
   }
 }
 
+static const char *bleStateName() {
+  if (!bleReady) return "off";
+  if (!bleConnected) return "advertising";
+  return bleWakeChar.subscribed() ? "subscribed" : "connected";
+}
+
 static void printStatus() {
   uint32_t now = millis();
-  sendLine("# status state=%s up=%lus wakes=%lu matches=%lu events=%lu errors=%lu reset=%s",
-           stateName(), (unsigned long)(now / 1000), (unsigned long)wakeCount,
+  sendLine("# status state=%s ble=%s up=%lus wakes=%lu matches=%lu events=%lu errors=%lu reset=%s",
+           stateName(), bleStateName(), (unsigned long)(now / 1000), (unsigned long)wakeCount,
            (unsigned long)ndpMatchCount, (unsigned long)ndpEventCount,
            (unsigned long)ndpErrorCount, resetReason);
+  if (bleReady) sendLine("# ble name %s address %s", BLE_NAME, BLE.address().c_str());
   if (hasWoken) sendLine("# last wake %lu ms ago", (unsigned long)(now - lastWakeMs));
   if (state == STATE_ERROR) sendLine("# error: %s", errorReason);
   printLabels();
 }
 
 static void printHelp() {
-  sendLine("# commands: s=status t=test-wake r=reboot h=help");
+  sendLine("# commands: s=status t=test-wake(BLE) r=reboot h=help");
 }
 
 // ----------------------------------------------------------------------------
@@ -244,6 +265,68 @@ static bool initNdp() {
 }
 
 // ----------------------------------------------------------------------------
+// Bluetooth LE (event handlers run inside BLE.poll(), i.e. in loop())
+// ----------------------------------------------------------------------------
+static void onBleConnected(BLEDevice central) {
+  bleConnected = true;
+  sendLine("# ble connected: %s", central.address().c_str());
+}
+
+static void onBleDisconnected(BLEDevice central) {
+  bleConnected = false;
+  sendLine("# ble disconnected: %s - advertising again", central.address().c_str());
+  BLE.advertise();   // harmless if the stack already restarted advertising
+}
+
+static void onBleSubscribed(BLEDevice central, BLECharacteristic) {
+  sendLine("# ble %s subscribed to wake notifications", central.address().c_str());
+}
+
+static bool initBle() {
+  kickWatchdog();
+  if (!BLE.begin()) {
+    enterError("BLE init failed");
+    return false;
+  }
+  BLE.setLocalName(BLE_NAME);
+  BLE.setDeviceName(BLE_NAME);
+  BLE.setAdvertisedService(bleService);
+  bleService.addCharacteristic(bleWakeChar);
+  BLE.addService(bleService);
+  bleWakeChar.writeValue(0);
+  BLE.setEventHandler(BLEConnected, onBleConnected);
+  BLE.setEventHandler(BLEDisconnected, onBleDisconnected);
+  bleWakeChar.setEventHandler(BLESubscribed, onBleSubscribed);
+  sendLine("# ble ok");
+  return true;
+}
+
+// Called after the NDP is loaded (same order as the NDP "BLExaDemo" example).
+static bool startBleAdvertising() {
+  if (!BLE.advertise()) {
+    enterError("BLE advertise failed");
+    return false;
+  }
+  bleReady = true;
+  sendLine("# ble advertising as \"%s\" (%s)", BLE_NAME, BLE.address().c_str());
+  return true;
+}
+
+// The only thing that goes over Bluetooth: bump the counter and notify it.
+static void sendWake(const char *name) {
+  wakeCount++;
+  ledFlash(blue, LED_FLASH_MS);
+  if (!bleReady) {
+    sendLine("# WAKE %s #%lu - BLE not ready", name, (unsigned long)wakeCount);
+    return;
+  }
+  bool subscribed = bleWakeChar.subscribed();
+  bleWakeChar.writeValue(wakeCount);   // notifies subscribed centrals
+  sendLine("# WAKE %s #%lu -> %s", name, (unsigned long)wakeCount,
+           subscribed ? "notified over BLE" : "no BLE subscriber, nobody notified");
+}
+
+// ----------------------------------------------------------------------------
 // Loop tasks (all non-blocking)
 // ----------------------------------------------------------------------------
 static void handleMatches() {
@@ -270,9 +353,7 @@ static void handleMatches() {
 
   hasWoken = true;
   lastWakeMs = now;
-  wakeCount++;
-  sendLine("WAKE %s", name);   // the line the backend acts on - send it first
-  ledFlash(blue, LED_FLASH_MS);
+  sendWake(name);
 }
 
 static void handleErrors() {
@@ -298,11 +379,7 @@ static void handleSerialCommands() {
     int c = Serial.read();
     switch (c) {
       case 's': case 'S': printStatus(); break;
-      case 't': case 'T':
-        wakeCount++;
-        sendLine("WAKE test");
-        ledFlash(blue, LED_FLASH_MS);
-        break;
+      case 't': case 'T': sendWake("test"); break;
       case 'r': case 'R': reboot("requested"); break;
       case 'h': case 'H': case '?': printHelp(); break;
       default: break;   // ignore newlines and noise
@@ -313,7 +390,7 @@ static void handleSerialCommands() {
 static void handleHeartbeat(uint32_t now) {
   if (now - lastHeartbeatMs < HEARTBEAT_MS) return;
   lastHeartbeatMs = now;
-  sendLine("# alive state=%s up=%lus wakes=%lu errors=%lu", stateName(),
+  sendLine("# alive state=%s ble=%s up=%lus wakes=%lu errors=%lu", stateName(), bleStateName(),
            (unsigned long)(now / 1000), (unsigned long)wakeCount, (unsigned long)ndpErrorCount);
 }
 
@@ -345,7 +422,8 @@ void setup() {
   ledSet(yellow);
   kickWatchdog();
 
-  if (initNdp()) {
+  // BLE.begin() before loading the NDP, advertising after (as in BLExaDemo).
+  if (initBle() && initNdp() && startBleAdvertising()) {
     state = STATE_RUNNING;
     seenErrors = ndpErrorCount;
     seenMatches = ndpMatchCount;
@@ -360,6 +438,7 @@ void loop() {
   kickWatchdog();
   uint32_t now = millis();
 
+  if (bleReady) BLE.poll();   // runs the BLE connect/disconnect/subscribe handlers
   handleSerialCommands();
 
   if (state == STATE_RUNNING) {

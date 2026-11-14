@@ -82,3 +82,12 @@ browser on the board itself.
 - The choice is saved in `python/settings.json` and applies immediately. Models for a new language load in the background.
 - API: `GET /api/languages` and `POST /api/languages?user=en&partner=de`.
 - Fully offline: no external scripts or fonts.
+
+## Wake word "Alexa" (Nicla Voice over Bluetooth)
+An Arduino Nicla Voice listens for "Alexa" and tells the UNO Q over **Bluetooth LE**. Saying "Alexa" works like holding **C**: it starts listening to the partner.
+- `nicla_wake/nicla_wake.ino`: flash it to the Nicla Voice. It needs the **ArduinoBLE** library and the `mbed_nicla` core.
+  It advertises as `NiclaWake`. Over BLE it sends only the wake signal: a uint32 counter that is notified once per "Alexa".
+- **Debug output stays on the Nicla's USB serial port** (115200 baud). Open the Serial Monitor to see it:
+  status, BLE connect/disconnect, every match. Commands: `s` status, `t` send a test wake over BLE, `r` reboot, `h` help.
+- `python/wake.py` (UNO Q): scans for the Nicla with `bleak` (BlueZ), subscribes, and reconnects automatically.
+  Set `NICLA_BLE_ADDRESS=<mac>` to skip scanning. The Nicla only needs USB for power (or a battery).

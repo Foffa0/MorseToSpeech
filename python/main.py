@@ -13,6 +13,7 @@ from morse import MorseDecoder
 from speech_to_morse import SpeechToMorse
 from translate import Translator
 from tts import VOICE_PATHS, Speaker
+import wake
 
 # --- Languages ------------------------------------------------------------------
 # The user taps Morse in their language. If the partner speaks another language,
@@ -156,6 +157,14 @@ Bridge.provide("key_up", key_up)
 Bridge.provide("backspace", backspace)
 Bridge.provide("speak", speak)
 Bridge.provide("calibrate", start_calibration)
+
+# --- Wake word (Nicla Voice over Bluetooth LE, see wake.py) ---
+def on_wake(label):
+    print(f"[wake] wake word detected ({label})", flush=True)
+    activate_listening()
+
+
+wake.start(on_wake)  # returns immediately, never raises
 
 
 # --- Web page: language selection (assets/index.html) -------------------------
