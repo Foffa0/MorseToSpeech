@@ -1,5 +1,7 @@
 # MorseToSpeech
 
+> This project is our contribution to the Speech To Speech Hackathon. A 24-hour build on the Arduino® UNO™ Q.
+
 **A conversation device for deafblind people: anyone can just talk to them, and they feel the words as Morse code.
 Built on an Arduino UNO Q, fully offline.**
 
